@@ -34,37 +34,6 @@ router.patch(
   toggleProductStatus,
 );
 
-// Product Vaiations
-
-import {
-  getAllVariationTypes,
-  getVariationTypeById,
-  createVariationType,
-  updateVariationType,
-  deleteVariationType,
-} from "../controllers/product_variations.controller.js";
-
-router.get("/get_all_variations", getAllVariationTypes);
-router.get("/get_variation_by_id/:id", verifyToken, getVariationTypeById);
-router.post(
-  "/create_variation",
-  verifyToken,
-  authorize("Admin", "Staff"),
-  createVariationType,
-);
-router.put(
-  "/update_variation/:id",
-  verifyToken,
-  authorize("Admin", "Staff"),
-  updateVariationType,
-);
-router.delete(
-  "/delete_variation/:id",
-  verifyToken,
-  authorize("Admin", "Staff"),
-  deleteVariationType,
-);
-
 // Product images
 
 import {
@@ -122,6 +91,9 @@ import {
 router.get("/:productId/attributes/get_all_attributes", getProductAttributes);
 router.post("/:productId/attributes/create_attibute", addProductAttribute);
 router.put("/attributes/update_attribute/:attributeId", updateProductAttribute);
-router.delete("/attributes/delete_attribute/:attributeId", deleteProductAttribute);
+router.delete(
+  "/attributes/delete_attribute/:attributeId",
+  deleteProductAttribute,
+);
 
 export default router;
