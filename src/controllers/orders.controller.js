@@ -365,16 +365,14 @@ export const createOrder = async (req, res) => {
         unit_price: parseFloat(item.unit_price),
       })),
     };
-
+    res
+      .status(201)
+      .json({ success: true, data: { order_id: orderId, total_amount } });
     try {
       await sendOrderConfirmationEmail(order.customer_email, orderDetails);
     } catch (emailErr) {
       console.error("Email error:", emailErr);
     }
-
-    res
-      .status(201)
-      .json({ success: true, data: { order_id: orderId, total_amount } });
   } catch (error) {
     await connection.rollback();
     console.error(error);
