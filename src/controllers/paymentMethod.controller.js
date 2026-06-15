@@ -1,50 +1,36 @@
 import { pool } from "../config/db.js";
 import crypto from "crypto";
+import { logAudit } from "../lib/auditLog.js";
 
 // Encryption key (32 bytes for AES-256) - store in environment variables
 const ENCRYPTION_KEY =
   process.env.ENCRYPTION_KEY || crypto.randomBytes(32).toString("hex");
-const IV_LENGTH = 16; // For AES, this is always 16 bytes
+const IV_LENGTH = 16;
 
-// Helper: Encrypt data
 const encrypt = (text) => {
-  // Generate a random initialization vector
   const iv = crypto.randomBytes(IV_LENGTH);
-
-  // Create cipher using AES-256-CBC algorithm
   const cipher = crypto.createCipheriv(
     "aes-256-cbc",
     Buffer.from(ENCRYPTION_KEY, "hex"),
     iv,
   );
-
-  // Encrypt the text
   let encrypted = cipher.update(text, "utf8", "hex");
   encrypted += cipher.final("hex");
-
-  // Return IV + encrypted data (both needed for decryption)
   return iv.toString("hex") + ":" + encrypted;
 };
 
-// Helper: Decrypt data (for admin panel or internal use)
 const decrypt = (encryptedText) => {
   try {
-    // Split the stored text into IV and encrypted data
     const parts = encryptedText.split(":");
     const iv = Buffer.from(parts.shift(), "hex");
     const encrypted = parts.join(":");
-
-    // Create decipher
     const decipher = crypto.createDecipheriv(
       "aes-256-cbc",
       Buffer.from(ENCRYPTION_KEY, "hex"),
       iv,
     );
-
-    // Decrypt
     let decrypted = decipher.update(encrypted, "hex", "utf8");
     decrypted += decipher.final("utf8");
-
     return decrypted;
   } catch (error) {
     console.error("Decryption failed:", error);
@@ -58,21 +44,16 @@ export const getUserPaymentMethods = async (req, res) => {
   const userRole = req.user.role;
   const targetUserId = req.params.userId || userId;
 
-  // Access control
   if (userRole !== "Admin" && targetUserId != userId) {
     return res.status(403).json({ success: false, message: "Access denied" });
   }
 
-  // Pagination parameters
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 10;
   const offset = (page - 1) * limit;
-
-  // Search parameter
   const search = req.query.search || "";
 
   try {
-    // Build WHERE clause with search
     let whereClause = "user_id = ? AND is_active = TRUE";
     const queryParams = [targetUserId];
 
@@ -81,7 +62,7 @@ export const getUserPaymentMethods = async (req, res) => {
         method_type LIKE ? OR 
         last_four LIKE ? OR 
         card_holder_name LIKE ? OR
-        expiry_date LIKE ?
+        identifier LIKE ?
       )`;
       const searchPattern = `%${search}%`;
       queryParams.push(
@@ -92,20 +73,14 @@ export const getUserPaymentMethods = async (req, res) => {
       );
     }
 
-    // Count total records for pagination metadata
-    const countQuery = `
-      SELECT COUNT(*) as total
-      FROM payment_methods
-      WHERE ${whereClause}
-    `;
+    const countQuery = `SELECT COUNT(*) as total FROM payment_methods WHERE ${whereClause}`;
     const [countResult] = await pool.query(countQuery, queryParams);
     const totalItems = countResult[0].total;
     const totalPages = Math.ceil(totalItems / limit);
 
-    // Main query with pagination and sorting
     const dataQuery = `
-      SELECT id, method_type, last_four, expiry_date, card_holder_name, 
-             is_default, is_active, created_at
+      SELECT id, method_type, last_four, expiry_month, expiry_year, card_holder_name,
+             gateway_reference, is_default, is_active, created_at
       FROM payment_methods
       WHERE ${whereClause}
       ORDER BY is_default DESC, created_at DESC
@@ -131,15 +106,22 @@ export const getUserPaymentMethods = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
+
 // Add new payment method
 export const addPaymentMethod = async (req, res) => {
+  const [ressss] = await pool.query(`SHOW COLUMNS FROM payment_methods;`);
+  console.log(ressss);
+
   const userId = req.user.id;
   const userRole = req.user.role;
   const {
     user_id,
     method_type,
-    card_number,
-    expiry_date,
+    identifier, // card number, UPI VPA, bank code, etc.
+    gateway_reference,
+    last_four,
+    expiry_month,
+    expiry_year,
     card_holder_name,
     is_default,
   } = req.body;
@@ -147,30 +129,49 @@ export const addPaymentMethod = async (req, res) => {
   let targetUserId = userId;
   if (userRole === "Admin" && user_id) targetUserId = user_id;
 
-  if (!method_type || !card_number || !expiry_date || !card_holder_name) {
-    return res.status(400).json({
-      success: false,
-      message:
-        "Missing required fields: method_type, card_number, expiry_date, card_holder_name",
-    });
-  }
-
-  const allowedTypes = ["credit_card", "upi", "afterpay", "bank_transfer"];
+  // Validate method_type (match your ENUM)
+  const allowedTypes = ["credit_card", "upi", "netbanking", "cash"];
   if (!allowedTypes.includes(method_type)) {
     return res.status(400).json({
       success: false,
       message:
-        "Invalid method_type. Allowed: credit_card, upi, afterpay, bank_transfer",
+        "Invalid method_type. Allowed: credit_card, upi, netbanking, cash",
     });
   }
 
-  let lastFour = null;
+  // Conditional validation
   if (method_type === "credit_card") {
-    lastFour = card_number.slice(-4);
+    if (!identifier || !expiry_month || !expiry_year || !card_holder_name) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "For credit_card, identifier (card number), expiry_month, expiry_year, and card_holder_name are required",
+      });
+    }
+    if (expiry_month < 1 || expiry_month > 12) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid expiry_month (1-12)" });
+    }
+    if (!last_four) {
+      // Auto-extract from identifier if not provided
+      const cardNumber = identifier;
+      if (cardNumber.length >= 4) {
+        req.body.last_four = cardNumber.slice(-4);
+      }
+    }
+  } else {
+    // For upi, netbanking, cash: only identifier is required
+    if (!identifier) {
+      return res.status(400).json({
+        success: false,
+        message: `For ${method_type}, an identifier (e.g., UPI VPA, bank code) is required`,
+      });
+    }
   }
 
-  // Encrypt the sensitive payment details
-  const encryptedDetails = encrypt(card_number);
+  // Encrypt the identifier
+  const encryptedIdentifier = encrypt(identifier);
 
   const connection = await pool.getConnection();
   try {
@@ -185,21 +186,42 @@ export const addPaymentMethod = async (req, res) => {
 
     const [result] = await connection.query(
       `INSERT INTO payment_methods 
-       (user_id, method_type, tokenised_details, last_four, expiry_date, 
-        card_holder_name, is_default)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       (user_id, method_type, identifier, gateway_reference, last_four, 
+        expiry_month, expiry_year, card_holder_name, is_default)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         targetUserId,
         method_type,
-        encryptedDetails,
-        lastFour,
-        expiry_date,
-        card_holder_name,
+        encryptedIdentifier,
+        gateway_reference || null,
+        method_type === "credit_card" ? req.body.last_four || last_four : null,
+        method_type === "credit_card" ? expiry_month : null,
+        method_type === "credit_card" ? expiry_year : null,
+        method_type === "credit_card" ? card_holder_name : null,
         is_default || false,
       ],
     );
 
     await connection.commit();
+
+    // Fetch the newly created row for audit log (exclude encrypted identifier)
+    const [newPaymentMethod] = await pool.query(
+      `SELECT id, user_id, method_type, gateway_reference, last_four, 
+              expiry_month, expiry_year, card_holder_name, is_default, is_active
+       FROM payment_methods WHERE id = ?`,
+      [result.insertId],
+    );
+
+    await logAudit({
+      userId: req.user.id,
+      action: "CREATE_PAYMENT_METHOD",
+      tableName: "payment_methods",
+      recordId: result.insertId,
+      oldData: null,
+      newData: newPaymentMethod[0],
+      req,
+    });
+
     res.status(201).json({
       success: true,
       data: { payment_method_id: result.insertId },
@@ -220,11 +242,18 @@ export const updatePaymentMethod = async (req, res) => {
   const { id } = req.params;
   const userId = req.user.id;
   const userRole = req.user.role;
-  const { is_default, is_active, expiry_date, card_holder_name } = req.body;
+  const {
+    is_default,
+    is_active,
+    expiry_month,
+    expiry_year,
+    card_holder_name,
+    gateway_reference,
+  } = req.body;
 
   try {
     const [methods] = await pool.query(
-      "SELECT user_id FROM payment_methods WHERE id = ?",
+      "SELECT * FROM payment_methods WHERE id = ?",
       [id],
     );
     if (methods.length === 0) {
@@ -256,13 +285,21 @@ export const updatePaymentMethod = async (req, res) => {
       updates.push("is_active = ?");
       values.push(is_active);
     }
-    if (expiry_date) {
-      updates.push("expiry_date = ?");
-      values.push(expiry_date);
+    if (expiry_month !== undefined) {
+      updates.push("expiry_month = ?");
+      values.push(expiry_month);
     }
-    if (card_holder_name) {
+    if (expiry_year !== undefined) {
+      updates.push("expiry_year = ?");
+      values.push(expiry_year);
+    }
+    if (card_holder_name !== undefined) {
       updates.push("card_holder_name = ?");
       values.push(card_holder_name);
+    }
+    if (gateway_reference !== undefined) {
+      updates.push("gateway_reference = ?");
+      values.push(gateway_reference);
     }
 
     if (updates.length === 0) {
@@ -278,8 +315,31 @@ export const updatePaymentMethod = async (req, res) => {
       values,
     );
 
+    // Fetch updated row
+    const [updatedMethod] = await connection.query(
+      `SELECT id, user_id, method_type, gateway_reference, last_four, 
+              expiry_month, expiry_year, card_holder_name, is_default, is_active
+       FROM payment_methods WHERE id = ?`,
+      [id],
+    );
+
     await connection.commit();
-    res.json({ success: true, message: "Payment method updated" });
+
+    await logAudit({
+      userId: req.user.id,
+      action: "UPDATE_PAYMENT_METHOD",
+      tableName: "payment_methods",
+      recordId: id,
+      oldData: methods[0],
+      newData: updatedMethod[0],
+      req,
+    });
+
+    res.json({
+      success: true,
+      message: "Payment method updated",
+      data: updatedMethod[0],
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ success: false, message: "Server error" });
@@ -294,7 +354,7 @@ export const deletePaymentMethod = async (req, res) => {
 
   try {
     const [methods] = await pool.query(
-      "SELECT user_id FROM payment_methods WHERE id = ?",
+      "SELECT * FROM payment_methods WHERE id = ?",
       [id],
     );
     if (methods.length === 0) {
@@ -307,6 +367,15 @@ export const deletePaymentMethod = async (req, res) => {
     }
 
     await pool.query("DELETE FROM payment_methods WHERE id = ?", [id]);
+    await logAudit({
+      userId: req.user.id,
+      action: "DELETE_PAYMENT_METHOD",
+      tableName: "payment_methods",
+      recordId: id,
+      oldData: methods[0],
+      newData: null,
+      req,
+    });
     res.json({ success: true, message: "Payment method deleted" });
   } catch (error) {
     console.error(error);

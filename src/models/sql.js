@@ -9,7 +9,7 @@ export const sql = `
     phone VARCHAR(15) UNIQUE NOT NULL,
 
     full_name VARCHAR(100)  NOT NULL,
-    username VARCHAR(100) UNIQUE NOT NULL,
+    email VARCHAR(100) UNIQUE NOT NULL,
 
     otp VARCHAR(6),
 
@@ -90,6 +90,56 @@ CREATE TABLE IF NOT EXISTS brands (
     website VARCHAR(255)
 );
 
+
+-- =============================================
+-- VEHICLE MAKES (e.g., Toyota, Honda, Ford)
+-- =============================================
+CREATE TABLE IF NOT EXISTS vehicle_makes (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL UNIQUE,          -- e.g., 'Toyota'
+    logo_url VARCHAR(255) NULL,
+    country VARCHAR(100) NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_name (name)
+);
+
+-- =============================================
+-- VEHICLE MODELS (e.g., Camry, Civic, F-150)
+-- =============================================
+CREATE TABLE IF NOT EXISTS vehicle_models (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    make_id INT NOT NULL,
+    name VARCHAR(100) NOT NULL,                 -- e.g., 'Camry'
+    description TEXT NULL,
+    model_image_url VARCHAR(255) NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (make_id) REFERENCES vehicle_makes(id) ON DELETE CASCADE ON UPDATE CASCADE,
+    UNIQUE KEY idx_make_model (make_id, name),  -- ensures model name is unique per make
+    INDEX idx_name (name)
+);
+
+-- =============================================
+-- VEHICLE GENERATIONS (year range / generation code)
+-- =============================================
+CREATE TABLE IF NOT EXISTS vehicle_generations (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    model_id INT NOT NULL,
+    generation_name VARCHAR(100) NULL,          -- e.g., 'XV70', '10th Gen', 'Facelift'
+    year_from INT NOT NULL,                     -- start year (e.g., 2018)
+    year_to INT NULL,                           -- end year (e.g., 2022), NULL if current
+    engine_options TEXT NULL,                   -- optional: JSON or comma-separated
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (model_id) REFERENCES vehicle_models(id) ON DELETE CASCADE ON UPDATE CASCADE,
+    INDEX idx_year_range (year_from, year_to),
+    INDEX idx_generation (model_id, year_from)
+);
+
+
+
+
 -- ===========================================
 -- 4. PRODUCTS table
 -- ===========================================
@@ -120,6 +170,23 @@ CREATE TABLE IF NOT EXISTS products (
 );
 
 
+
+-- =============================================
+-- (Optional) Pivot table: Product <-> Vehicle Generation
+-- Allows a product to fit multiple vehicle generations
+-- =============================================
+CREATE TABLE IF NOT EXISTS product_vehicle_compatibility (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    product_id INT NOT NULL,
+    vehicle_generation_id INT NOT NULL,
+    compatibility_notes TEXT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
+    FOREIGN KEY (vehicle_generation_id) REFERENCES vehicle_generations(id) ON DELETE CASCADE,
+    UNIQUE KEY idx_product_vehicle (product_id, vehicle_generation_id),
+    INDEX idx_product_id (product_id),
+    INDEX idx_vehicle_generation_id (vehicle_generation_id)
+);
 
 -- ===========================================
 -- 6. PRODUCTS ITEMS
@@ -201,36 +268,42 @@ CREATE TABLE IF NOT EXISTS product_stock (
 -- =============================================
 -- 10. CART table (supports both logged-in users and guests)
 -- =============================================
+
 CREATE TABLE IF NOT EXISTS cart (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    user_id INT NULL,                           -- NULL for guest carts
-    session_token VARCHAR(255) NULL,            -- unique token for guest carts
+    user_id INT NULL,
+    session_token VARCHAR(255) NULL,
+    items JSON NOT NULL DEFAULT (JSON_ARRAY()),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    
-    -- Ensure either user_id or session_token is present (optional, can be enforced in app)
     INDEX idx_user_id (user_id),
     INDEX idx_session_token (session_token),
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE
 );
 
+
+
 -- =============================================
--- 11. CART_ITEMS table
+-- 14 Guest Token
 -- =============================================
-CREATE TABLE IF NOT EXISTS cart_items (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    cart_id INT NOT NULL,
-    product_item_id INT NOT NULL,
-    quantity INT NOT NULL CHECK (quantity > 0),
-    unit_price DECIMAL(10,2) NOT NULL,           -- snapshot price at add time
-    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    
-    FOREIGN KEY (cart_id) REFERENCES cart(id) ON DELETE CASCADE ON UPDATE CASCADE,
-    FOREIGN KEY (product_item_id) REFERENCES product_items(id) ON DELETE RESTRICT ON UPDATE CASCADE,
-    
-    INDEX idx_cart_id (cart_id),
-    INDEX idx_product_item_id (product_item_id)
-);
+
+CREATE TABLE IF NOT EXISTS guest_sessions (
+token VARCHAR(255) PRIMARY KEY,
+ created_at TIMESTAMP,
+  last_used TIMESTAMP);
+
+
+
+
+-- =============================================
+-- 17 Payment Methods
+-- =============================================
+
+
+
+
+
+
 
 -- =============================================
 -- 12. ORDERS table
@@ -246,20 +319,28 @@ CREATE TABLE IF NOT EXISTS orders (
     shipping_cost DECIMAL(10,2) DEFAULT 0.00,
     tax_amount DECIMAL(10,2) DEFAULT 0.00,
     discount_amount DECIMAL(10,2) DEFAULT 0.00,
+    payment_method ENUM('card', 'upi', 'bank_transfer', 'cash') NOT NULL DEFAULT 'card',
     total_amount DECIMAL(10,2) NOT NULL,
-    currency_code VARCHAR(3) DEFAULT 'USD',      -- e.g., USD, EUR, INR
+    currency_code VARCHAR(3) DEFAULT 'USD',
     customer_notes TEXT,
     admin_notes TEXT,
     payment_status ENUM('pending', 'paid', 'failed', 'refunded') DEFAULT 'pending',
     return_date TIMESTAMP NULL,
-    
+
+    -- === NEW COLUMNS ===
+    coupon_id INT NULL,                                    -- References the coupon used
+  
+    -- ==================
+
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT ON UPDATE CASCADE,
     FOREIGN KEY (shipping_address_id) REFERENCES user_addresses(id) ON DELETE RESTRICT ON UPDATE CASCADE,
     FOREIGN KEY (billing_address_id) REFERENCES user_addresses(id) ON DELETE RESTRICT ON UPDATE CASCADE,
-    
+    FOREIGN KEY (coupon_id) REFERENCES coupons(id) ON DELETE SET NULL ON UPDATE CASCADE,   -- If coupon deleted, keep order history
+
     INDEX idx_user_id (user_id),
     INDEX idx_order_status (order_status),
-    INDEX idx_order_date (order_date)
+    INDEX idx_order_date (order_date),
+    INDEX idx_coupon_id (coupon_id)                         -- Optional but recommended
 );
 
 -- =============================================
@@ -281,77 +362,32 @@ CREATE TABLE IF NOT EXISTS order_items (
     INDEX idx_product_item_id (product_item_id)
 );
 
+
+
 -- =============================================
--- 14 Guest Token
+-- COUPONS (master list of available coupons)
 -- =============================================
-
-CREATE TABLE IF NOT EXISTS guest_sessions (
-token VARCHAR(255) PRIMARY KEY,
- created_at TIMESTAMP,
-  last_used TIMESTAMP);
-
-
-
-
-  
--- =============================================
--- 15 SHIPMENTS
--- =============================================
-CREATE TABLE IF NOT EXISTS shipments (
+CREATE TABLE IF NOT EXISTS coupons (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    order_id INT NOT NULL,
-    carrier VARCHAR(100) NOT NULL,
-    tracking_number VARCHAR(255),
-    tracking_url TEXT,
-    shipped_at TIMESTAMP NULL,
-    delivered_at TIMESTAMP NULL,
-    shipment_status ENUM('processing', 'in_transit', 'delivered', 'returned') DEFAULT 'processing',
+    code VARCHAR(50) NOT NULL UNIQUE,
+    discount_type ENUM('percentage', 'fixed') NOT NULL,
+    discount_value DECIMAL(10,2) NOT NULL,          -- e.g., 5 for 5% or 50 for ₹50
+    min_order_amount DECIMAL(10,2) DEFAULT 0.00,
+    max_discount_amount DECIMAL(10,2) NULL,         -- for percentage coupons, max discount cap
+    usage_limit_per_user INT DEFAULT 1,             -- how many times one user can use this coupon
+    total_usage_limit INT NULL,                     -- global usage limit (across all users)
+    valid_from TIMESTAMP NOT NULL,
+    valid_to TIMESTAMP NOT NULL,
+    description TEXT NULL,
+    is_active tinyint(1) DEFAULT true,
+    created_by_user_id INT NULL,                    -- admin who created it (or system)
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE RESTRICT ON UPDATE CASCADE,
-    INDEX idx_order_id (order_id),
-    INDEX idx_shipment_status (shipment_status),
-    INDEX idx_tracking_number (tracking_number)
+    INDEX idx_code (code),
+    INDEX idx_valid_dates (valid_from, valid_to),
+    INDEX idx_discount_type (discount_type)
 );
 
--- =============================================
--- 16 Shipments Table
--- =============================================
-CREATE TABLE IF NOT EXISTS shipment_items (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    shipment_id INT NOT NULL,
-    order_item_id INT NOT NULL,
-    quantity_shipped INT NOT NULL CHECK (quantity_shipped > 0),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (shipment_id) REFERENCES shipments(id) ON DELETE CASCADE ON UPDATE CASCADE,
-    FOREIGN KEY (order_item_id) REFERENCES order_items(id) ON DELETE RESTRICT ON UPDATE CASCADE,
-    UNIQUE KEY unique_shipment_item (shipment_id, order_item_id),
-    INDEX idx_shipment_id (shipment_id),
-    INDEX idx_order_item_id (order_item_id)
-);
-
--- =============================================
--- 17 Payment Methods
--- =============================================
-CREATE TABLE IF NOT EXISTS payment_methods (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    user_id INT NULL,
-    method_type ENUM('credit_card', 'upi', 'afterpay', 'bank_transfer') NOT NULL,
-    tokenised_details TEXT NOT NULL, -- encrypted payment details
-    last_four VARCHAR(4), -- Last 4 digits for card, useful for display
-    expiry_date VARCHAR(7), -- MM/YYYY format for cards
-    card_holder_name VARCHAR(100),
-    is_default BOOLEAN DEFAULT FALSE,
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE,
-    INDEX idx_user_id (user_id),
-    INDEX idx_method_type (method_type),
-    INDEX idx_is_default (is_default),
-    INDEX idx_is_active (is_active)
-);
 
 -- =============================================
 -- 18 Transactions
@@ -359,28 +395,25 @@ CREATE TABLE IF NOT EXISTS payment_methods (
 CREATE TABLE IF NOT EXISTS transactions (
     id INT AUTO_INCREMENT PRIMARY KEY,
     order_id INT NOT NULL,
-    payment_method_id INT NULL,
+    payment_method ENUM('card', 'upi', 'bank_transfer', 'cash') NOT NULL,  -- new column
     transaction_type ENUM('authorisation', 'capture', 'refund', 'void') NOT NULL,
     amount DECIMAL(12, 2) NOT NULL CHECK (amount > 0),
     currency_code CHAR(3) DEFAULT 'IND',
-    gateway_reference_id VARCHAR(255), -- reference from payment processor (e.g., Stripe charge ID)
+    gateway_reference_id VARCHAR(255),
     status ENUM('pending', 'success', 'failed') DEFAULT 'pending',
-    error_message TEXT, -- Store failure reason if any
+    error_message TEXT,
     transaction_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    
     FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE RESTRICT ON UPDATE CASCADE,
-    FOREIGN KEY (payment_method_id) REFERENCES payment_methods(id) ON DELETE SET NULL ON UPDATE CASCADE,
     INDEX idx_order_id (order_id),
-    INDEX idx_payment_method_id (payment_method_id),
+    INDEX idx_payment_method (payment_method),      -- new index (optional)
     INDEX idx_transaction_type (transaction_type),
     INDEX idx_status (status),
     INDEX idx_gateway_reference (gateway_reference_id),
     INDEX idx_transaction_date (transaction_date)
 );
-
-
-
 -- =============================================
 -- 19. RETURNS table (with extra handwritten fields)
 -- =============================================
@@ -444,44 +477,6 @@ CREATE TABLE IF NOT EXISTS warranty_registrations (
 );
 
 -- =============================================
--- 22. SUPPORT_TICKETS table
--- =============================================
-CREATE TABLE IF NOT EXISTS support_tickets (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    user_id INT NOT NULL,
-    order_id INT NULL,                        -- nullable if not related to an order
-    subject VARCHAR(255) NOT NULL,
-    message TEXT NOT NULL,
-    ticket_status ENUM('open', 'in_progress', 'resolved', 'closed', 'answered', 'awaiting') DEFAULT 'open',
-    priority ENUM('low', 'medium', 'high', 'urgent') DEFAULT 'medium',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    resolved_at TIMESTAMP NULL,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT ON UPDATE CASCADE,
-    FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE SET NULL ON UPDATE CASCADE,
-    INDEX idx_user_id (user_id),
-    INDEX idx_order_id (order_id),
-    INDEX idx_ticket_status (ticket_status),
-    INDEX idx_priority (priority)
-);
-
--- =============================================
--- 23. TICKET_COMMUNICATIONS table
--- =============================================
-CREATE TABLE IF NOT EXISTS ticket_communications (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    ticket_id INT NOT NULL,
-    author_user_id INT NOT NULL,
-    message_body TEXT NOT NULL,
-    attachment_urls JSON NULL,                -- array of file links
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (ticket_id) REFERENCES support_tickets(id) ON DELETE CASCADE ON UPDATE CASCADE,
-    FOREIGN KEY (author_user_id) REFERENCES users(id) ON DELETE RESTRICT ON UPDATE CASCADE,
-    INDEX idx_ticket_id (ticket_id),
-    INDEX idx_author_user_id (author_user_id)
-);
-
--- =============================================
 -- 24. REVIEWS table
 -- =============================================
 CREATE TABLE IF NOT EXISTS reviews (
@@ -507,36 +502,9 @@ CREATE TABLE IF NOT EXISTS reviews (
     INDEX idx_status (status)
 );
 
--- =============================================
--- 25. TAX_RATES table
--- =============================================
-CREATE TABLE IF NOT EXISTS tax_rates (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    country_code CHAR(2) NOT NULL,
-    state_code VARCHAR(10) NULL,
-    tax_rate DECIMAL(5,4) NOT NULL,           -- e.g., 0.10 for 10%
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_country_state (country_code, state_code),
-    INDEX idx_is_active (is_active)
-);
 
--- =============================================
--- 26. SHIPPING_METHODS table
--- =============================================
-CREATE TABLE IF NOT EXISTS shipping_methods (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(100) NOT NULL,               -- e.g., "Australia Post Standard"
-    price DECIMAL(10,2) NOT NULL,
-    free_shipping_threshold DECIMAL(10,2) NULL,
-    estimated_days_min INT NOT NULL,
-    estimated_days_max INT NOT NULL,
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_is_active (is_active)
-);
+
+
 
 -- =============================================
 -- 27. AUDIT_LOG table
@@ -558,15 +526,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
     INDEX idx_created_at (created_at)
 );
 
--- =============================================
--- 28. SYSTEM_CONFIG table (key-value store)
--- =============================================
-CREATE TABLE IF NOT EXISTS system_config (
-    config_key VARCHAR(100) PRIMARY KEY,
-    config_value JSON NOT NULL,               -- allows storing any type (string, number, object)
-    description TEXT NULL,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-);
+
 
 
 `;

@@ -22,18 +22,18 @@ import availableStock from "./routes/product_stock.route.js";
 import guestTokenRoute from "./routes/guest_token.route.js";
 import cartRoutes from "./routes/cart.route.js";
 import orderRoutes from "./routes/order.route.js";
-import shipmentRoutes from "./routes/shipment.route.js";
+import vehicleMakeRoutes from "./routes/vehicleMake.routes.js";
+import vehicleModelRoutes from "./routes/vehicleModel.routes.js";
+import vehicleGenerationRoutes from "./routes/vehicleGeneration.routes.js";
+
 import paymentMothodsRoutes from "./routes/payment_method.route.js";
 import transactionsRoutes from "./routes/transactions.route.js";
-
+import couponRoutes from "./routes/couponAdmin.routes.js";
 import returnsRoutes from "./routes/returns.routes.js";
 import warrantyRoutes from "./routes/warranty.routes.js";
-import supportRoutes from "./routes/support.routes.js";
-import reviewsRoutes from "./routes/reviews.routes.js";
-import taxShippingRoutes from "./routes/taxShipping.routes.js";
 import auditLogRoutes from "./routes/auditLog.routes.js";
-import systemConfigRoutes from "./routes/systemConfig.routes.js";
-
+import reviewsRoutes from "./routes/reviews.routes.js";
+import vehicleCompatibilty from "./routes/vehicleCompatibility.routes.js";
 //Routes Defined
 
 app.use("/api/auth", authRoutes);
@@ -47,17 +47,21 @@ app.use("/api/available-stocks", availableStock);
 app.use("/api/guests/token", guestTokenRoute);
 app.use("/api/carts", cartRoutes);
 app.use("/api/orders", orderRoutes);
-app.use("/api/shipments", shipmentRoutes);
+app.use("/api/coupons", couponRoutes);
 app.use("/api/payment-methods", paymentMothodsRoutes);
 app.use("/api/transactions", transactionsRoutes);
 
 app.use("/api/returns", returnsRoutes);
 app.use("/api/warranty", warrantyRoutes);
-app.use("/api/support", supportRoutes);
+
 app.use("/api/reviews", reviewsRoutes);
-app.use("/api/tax-shipping", taxShippingRoutes);
+
 app.use("/api/audit-logs", auditLogRoutes);
-app.use("/api/config", systemConfigRoutes);
+
+app.use("/api/vehicle-makes", vehicleMakeRoutes);
+app.use("/api/vehicle-models", vehicleModelRoutes);
+app.use("/api/vehicle-generations", vehicleGenerationRoutes);
+app.use("/api/vehicle-compatibility", vehicleCompatibilty);
 
 app.listen(port, async () => {
   await connect();

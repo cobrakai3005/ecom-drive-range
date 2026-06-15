@@ -2,6 +2,7 @@ import pool from "../config/db.js";
 import { generateOtp } from "../lib/otp.js";
 import jwt from "jsonwebtoken";
 import cloudinary from "../config/cloudinary.js";
+import { sendOTPEmail } from "../services/nodemailer.service.js";
 const fiveMinutes = 5 * 60 * 1000;
 
 export const testController = (req, res) => {
@@ -9,9 +10,9 @@ export const testController = (req, res) => {
 };
 export const registerController = async (req, res) => {
   try {
-    const { username, phone, password, full_name } = req?.body;
+    const { phone, email, password, full_name } = req?.body;
 
-    if (!username || !phone || !password || !full_name) {
+    if (!email || !phone || !password || !full_name) {
       return res.json(400, {
         success: false,
         message: "Please fill all fields",
@@ -35,11 +36,8 @@ export const registerController = async (req, res) => {
     const profile_image = req.file?.path || null;
     const profile_image_id = req.file?.filename || null;
     // Check if user already exists
-    const getUserbyPhoneAndUsername = `SELECT * FROM users WHERE phone = ? OR username = ?`;
-    const [userRows] = await pool.query(getUserbyPhoneAndUsername, [
-      phone,
-      username,
-    ]);
+    const getUserbyPhoneAndEmail = `SELECT * FROM users WHERE phone = ? OR email = ?`;
+    const [userRows] = await pool.query(getUserbyPhoneAndEmail, [phone, email]);
 
     if (userRows.length > 0) {
       return res.status(400).json({
@@ -51,12 +49,12 @@ export const registerController = async (req, res) => {
     const otpExpire = new Date(Date.now() + fiveMinutes);
     // Insert new user
     const insertQuery = `
-             INSERT INTO users (full_name, username, profile_image, phone, otp, otp_expire, profile_image_id, password)
+             INSERT INTO users (full_name, email, profile_image, phone, otp, otp_expire, profile_image_id, password)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          `;
     const [result] = await pool.query(insertQuery, [
       full_name,
-      username,
+      email,
       profile_image,
       phone,
       otp,
@@ -70,20 +68,23 @@ export const registerController = async (req, res) => {
       result.insertId,
     ]);
 
-    res.status(201).json({
-      message: `Enter OTP sent to ${phone}`,
+    // Send OTP email
+    await sendOTPEmail(email, otp);
+
+    return res.status(201).json({
+      message: `Enter OTP sent to ${email}`,
       otp,
       success: true,
       data: newUserRows[0],
     });
   } catch (error) {
-    res.status(50).json({
+    console.log(error);
+
+    res.status(500).json({
       message: `Internal Server Error`,
       success: false,
     });
   }
-
-  return res.json("Test Controller");
 };
 export const verifyOTP = async (req, res) => {
   try {
@@ -170,19 +171,18 @@ export const verifyOTP = async (req, res) => {
 
 export const login = async (req, res) => {
   try {
-    const { username, password } = req?.body;
+    const { email, password } = req?.body;
 
-    if (!username || !password) {
+    if (!email || !password) {
       return res.status(400).json({
         success: false,
         message: "All fields are required",
       });
     }
 
-    const [userRows] = await pool.query(
-      `SELECT * FROM users WHERE username = ?`,
-      [username],
-    );
+    const [userRows] = await pool.query(`SELECT * FROM users WHERE email = ?`, [
+      email,
+    ]);
 
     if (userRows.length === 0) {
       return res.status(404).json({
@@ -219,6 +219,7 @@ export const login = async (req, res) => {
       {
         id: existingUser.id,
         phone: existingUser.phone,
+        email: existingUser.email,
         role: existingUser.role,
       },
       process.env.JWT_SECRET,
@@ -238,8 +239,9 @@ export const login = async (req, res) => {
       token,
       user: {
         id: existingUser.id,
-        username: existingUser.username,
+        email: existingUser.email,
         full_name: existingUser.full_name,
+        email: existingUser.email,
         phone: existingUser.phone,
         profile_image: existingUser.profile_image,
         role: existingUser.role,
@@ -256,24 +258,17 @@ export const login = async (req, res) => {
 
 export const resendOtp = async (req, res) => {
   try {
-    const { phone } = req?.body;
+    const { email } = req?.body;
 
-    if (!phone) {
+    if (!email) {
       return res.status(400).json({
         success: false,
         message: "Phone number is required",
       });
     }
 
-    if (phone.length !== 10) {
-      return res.status(400).json({
-        message: `Phone number must be 10 digits`,
-        success: false,
-      });
-    }
-
-    const [userRows] = await pool.query(`SELECT * FROM users WHERE phone = ?`, [
-      phone,
+    const [userRows] = await pool.query(`SELECT * FROM users WHERE email = ?`, [
+      email,
     ]);
 
     if (userRows.length <= 0) {
@@ -294,18 +289,19 @@ export const resendOtp = async (req, res) => {
     const otpExpire = new Date(Date.now() + 5 * 60 * 1000);
 
     await pool.query(
-      `UPDATE users SET otp = ?, otp_expire = ? WHERE phone = ?`,
-      [otp, otpExpire, phone],
+      `UPDATE users SET otp = ?, otp_expire = ? WHERE email = ?`,
+      [otp, otpExpire, email],
     );
 
     // Fetch updated user to return
     const [updatedRows] = await pool.query(
-      `SELECT * FROM users WHERE phone = ?`,
-      [phone],
+      `SELECT * FROM users WHERE email = ?`,
+      [email],
     );
-
+    // Send OTP email
+    await sendOTPEmail(email, otp);
     res.status(201).json({
-      message: `OTP resent successfully to ${phone}`,
+      message: `OTP resent successfully to ${email}`,
       success: true,
       data: updatedRows[0],
     });
@@ -320,19 +316,12 @@ export const resendOtp = async (req, res) => {
 
 export const forgetPassword = async (req, res) => {
   try {
-    const { phone, otp, password, confirmPassword } = req?.body;
+    const { email, otp, password, confirmPassword } = req?.body;
 
-    if (!phone || !otp || !password || !confirmPassword) {
+    if (!email || !otp || !password || !confirmPassword) {
       return res.status(400).json({
         success: false,
         message: "All fields are required",
-      });
-    }
-
-    if (phone.length !== 10) {
-      return res.status(400).json({
-        message: `Phone number must be 10 digits`,
-        success: false,
       });
     }
 
@@ -343,8 +332,8 @@ export const forgetPassword = async (req, res) => {
       });
     }
 
-    const [userRows] = await pool.query(`SELECT * FROM users WHERE phone = ?`, [
-      phone,
+    const [userRows] = await pool.query(`SELECT * FROM users WHERE email = ?`, [
+      email,
     ]);
 
     if (userRows.length <= 0) {
@@ -378,15 +367,15 @@ export const forgetPassword = async (req, res) => {
       });
     }
 
-    await pool.query(`UPDATE users SET password = ? WHERE phone = ?`, [
+    await pool.query(`UPDATE users SET password = ? WHERE email = ?`, [
       password,
-      phone,
+      email,
     ]);
 
     // Fetch updated user
     const [updatedRows] = await pool.query(
-      `SELECT * FROM users WHERE phone = ?`,
-      [phone],
+      `SELECT * FROM users WHERE email = ?`,
+      [email],
     );
 
     res.status(201).json({

@@ -1,5 +1,6 @@
 // controllers/productItemController.js
 import pool from "../config/db.js";
+import { logAudit } from "../lib/auditLog.js";
 
 // Helper: check if SKU already exists (for uniqueness)
 const isSkuUnique = async (sku, excludeId = null) => {
@@ -19,7 +20,7 @@ export const getAllProductItems = async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const offset = (page - 1) * limit;
-    const { product_id, variation_id, is_available, sku } = req.query;
+    const { product_id, is_available, sku } = req.query;
 
     let whereConditions = [];
     let params = [];
@@ -28,10 +29,7 @@ export const getAllProductItems = async (req, res) => {
       whereConditions.push("product_id = ?");
       params.push(product_id);
     }
-    if (variation_id) {
-      whereConditions.push("variation_id = ?");
-      params.push(variation_id);
-    }
+
     if (is_available !== undefined) {
       whereConditions.push("is_available = ?");
       params.push(is_available === "true");
@@ -52,9 +50,8 @@ export const getAllProductItems = async (req, res) => {
     const total = countResult[0].total;
 
     const [rows] = await pool.query(
-      `SELECT pi.*, vt.variation_type 
+      `SELECT pi.*
              FROM product_items pi
-             LEFT JOIN product_variations vt ON pi.variation_id = vt.id
              ${whereClause}
              ORDER BY pi.id ASC
              LIMIT ? OFFSET ?`,
@@ -77,9 +74,9 @@ export const getProductItemById = async (req, res) => {
   const { id } = req.params;
   try {
     const [rows] = await pool.query(
-      `SELECT pi.*, vt.variation_type 
+      `SELECT pi.*
              FROM product_items pi
-             LEFT JOIN product_variations vt ON pi.variation_id = vt.id
+
              WHERE pi.id = ?`,
       [id],
     );
@@ -99,7 +96,7 @@ export const getProductItemById = async (req, res) => {
 export const createProductItem = async (req, res) => {
   const {
     product_id,
-    variation_id,
+
     variation_value,
     sku,
     price,
@@ -110,13 +107,7 @@ export const createProductItem = async (req, res) => {
     is_available,
   } = req.body;
 
-  if (
-    !product_id ||
-    !variation_id ||
-    !variation_value ||
-    !sku ||
-    price === undefined
-  ) {
+  if (!product_id || !variation_value || !sku || price === undefined) {
     return res
       .status(400)
       .json({ success: false, message: "Missing required fields" });
@@ -132,15 +123,6 @@ export const createProductItem = async (req, res) => {
         .status(400)
         .json({ success: false, message: "Invalid product_id" });
 
-    const [variation] = await pool.query(
-      "SELECT id FROM product_variations WHERE id = ?",
-      [variation_id],
-    );
-    if (variation.length === 0)
-      return res
-        .status(400)
-        .json({ success: false, message: "Invalid variation_id" });
-
     if (!(await isSkuUnique(sku))) {
       return res
         .status(400)
@@ -149,11 +131,10 @@ export const createProductItem = async (req, res) => {
 
     const [result] = await pool.query(
       `INSERT INTO product_items 
-             (product_id, variation_id, variation_value, sku, price, weight, width, height, depth, is_available)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             (product_id, variation_value, sku, price, weight, width, height, depth, is_available)
+             VALUES (?,  ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         product_id,
-        variation_id,
         variation_value,
         sku,
         price,
@@ -213,26 +194,22 @@ export const updateProductItem = async (req, res) => {
           .status(400)
           .json({ success: false, message: "Invalid product_id" });
     }
-    if (variation_id) {
-      const [variation] = await pool.query(
-        "SELECT id FROM product_variations WHERE id = ?",
-        [variation_id],
-      );
-      if (variation.length === 0)
-        return res
-          .status(400)
-          .json({ success: false, message: "Invalid variation_id" });
-    }
+
     if (sku && sku !== existing[0].sku && !(await isSkuUnique(sku, id))) {
       return res
         .status(400)
         .json({ success: false, message: "SKU already exists" });
     }
+    // Auditing Price
+    // Fetch old product item
+    const [oldItem] = await pool.query(
+      "SELECT * FROM product_items WHERE id = ?",
+      [id],
+    );
 
     await pool.query(
       `UPDATE product_items SET
                 product_id = COALESCE(?, product_id),
-                variation_id = COALESCE(?, variation_id),
                 variation_value = COALESCE(?, variation_value),
                 sku = COALESCE(?, sku),
                 price = COALESCE(?, price),
@@ -244,7 +221,6 @@ export const updateProductItem = async (req, res) => {
              WHERE id = ?`,
       [
         product_id,
-        variation_id,
         variation_value,
         sku,
         price,
@@ -261,6 +237,18 @@ export const updateProductItem = async (req, res) => {
       "SELECT * FROM product_items WHERE id = ?",
       [id],
     );
+
+    // Log only changed fields (optional but recommended)
+    await logAudit({
+      userId: req.user.id,
+      action: "UPDATE",
+      tableName: "product_items",
+      recordId: updated[0].id,
+      oldData: oldItem[0],
+      newData: updated[0],
+      req,
+    });
+
     res.json({ success: true, data: updated[0] });
   } catch (error) {
     console.error(error);

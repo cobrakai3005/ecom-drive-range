@@ -1,0 +1,191 @@
+import { pool } from "../config/db.js";
+import { logAudit } from "../lib/auditLog.js";
+
+// ========== GET all vehicle makes (public + pagination + search) ==========
+export const getAllMakes = async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const offset = (page - 1) * limit;
+    const search = req.query.search || "";
+
+    let whereClause = "";
+    let params = [];
+    if (search) {
+      whereClause = "WHERE name LIKE ?";
+      params.push(`%${search}%`);
+    }
+
+    const [countResult] = await pool.query(
+      `SELECT COUNT(*) as total FROM vehicle_makes ${whereClause}`,
+      params,
+    );
+    const totalItems = countResult[0].total;
+    const totalPages = Math.ceil(totalItems / limit);
+
+    const [rows] = await pool.query(
+      `SELECT * FROM vehicle_makes ${whereClause}
+       ORDER BY name ASC
+       LIMIT ? OFFSET ?`,
+      [...params, limit, offset],
+    );
+
+    res.json({
+      success: true,
+      data: rows,
+      pagination: {
+        page,
+        limit,
+        totalItems,
+        totalPages,
+        hasNextPage: page < totalPages,
+        hasPrevPage: page > 1,
+      },
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+// ========== GET single make by id ==========
+export const getMakeById = async (req, res) => {
+  const { id } = req.params;
+  try {
+    const [rows] = await pool.query(
+      "SELECT * FROM vehicle_makes WHERE id = ?",
+      [id],
+    );
+    if (rows.length === 0) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Vehicle make not found" });
+    }
+    res.json({ success: true, data: rows[0] });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+// ========== CREATE new vehicle make (admin only) ==========
+export const createMake = async (req, res) => {
+  const { name, country } = req.body;
+  if (!name) {
+    return res
+      .status(400)
+      .json({ success: false, message: "Name is required" });
+  }
+
+  let logo_url = null;
+  if (req.file) {
+    logo_url = req.file.path;
+  }
+  try {
+    const [result] = await pool.query(
+      "INSERT INTO vehicle_makes (name, logo_url, country) VALUES (?, ?, ?)",
+      [name, logo_url || null, country || null],
+    );
+    const [newMake] = await pool.query(
+      "SELECT * FROM vehicle_makes WHERE id = ?",
+      [result.insertId],
+    );
+    await logAudit({
+      userId: req.user.id,
+      action: "CREATE_VEHICLE_MAKE",
+      tableName: "vehicle_makes",
+      recordId: result.insertId,
+      oldData: null,
+      newData: newMake[0],
+      req,
+    });
+    res.status(201).json({ success: true, data: newMake[0] });
+  } catch (error) {
+    console.error(error);
+    if (error.code === "ER_DUP_ENTRY") {
+      return res
+        .status(400)
+        .json({ success: false, message: "Make name already exists" });
+    }
+    res.status(500).json({ success: false, message: "Database error" });
+  }
+};
+
+// ========== UPDATE vehicle make ==========
+export const updateMake = async (req, res) => {
+  const { id } = req.params;
+  const { name, logo_url, country } = req.body;
+  try {
+    const [existing] = await pool.query(
+      "SELECT * FROM vehicle_makes WHERE id = ?",
+      [id],
+    );
+    if (existing.length === 0) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Vehicle make not found" });
+    }
+
+    await pool.query(
+      "UPDATE vehicle_makes SET name = COALESCE(?, name), logo_url = COALESCE(?, logo_url), country = COALESCE(?, country) WHERE id = ?",
+      [name, logo_url, country, id],
+    );
+    const [updated] = await pool.query(
+      "SELECT * FROM vehicle_makes WHERE id = ?",
+      [id],
+    );
+    await logAudit({
+      userId: req.user.id,
+      action: "UPDATE_VEHICLE_MAKE",
+      tableName: "vehicle_makes",
+      recordId: id,
+      oldData: existing[0],
+      newData: updated[0],
+      req,
+    });
+    res.json({ success: true, data: updated[0] });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: "Update error" });
+  }
+};
+
+// ========== DELETE vehicle make (only if no models exist) ==========
+export const deleteMake = async (req, res) => {
+  const { id } = req.params;
+  try {
+    const [models] = await pool.query(
+      "SELECT id FROM vehicle_models WHERE make_id = ? LIMIT 1",
+      [id],
+    );
+    if (models.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Cannot delete make because it has associated models",
+      });
+    }
+    const [existing] = await pool.query(
+      "SELECT * FROM vehicle_makes WHERE id = ?",
+      [id],
+    );
+    if (existing.length === 0) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Vehicle make not found" });
+    }
+    await pool.query("DELETE FROM vehicle_makes WHERE id = ?", [id]);
+    await logAudit({
+      userId: req.user.id,
+      action: "DELETE_VEHICLE_MAKE",
+      tableName: "vehicle_makes",
+      recordId: id,
+      oldData: existing[0],
+      newData: null,
+      req,
+    });
+    res.json({ success: true, message: "Vehicle make deleted" });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};

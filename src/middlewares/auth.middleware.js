@@ -32,7 +32,7 @@ const verifyToken = async (req, res, next) => {
     const [rows] = await pool.query(
       `SELECT
                 id,
-                username,
+                email,
                 phone,
                 profile_image,
                 role,

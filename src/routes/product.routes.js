@@ -75,9 +75,19 @@ import {
 
 router.get("/get_all_items", getAllProductItems);
 router.get("/get_item_by_id/:id", getProductItemById);
-router.post("/create_item", createProductItem);
-router.put("/update_item/:id", updateProductItem);
-router.delete("/delete_item/:id", deleteProductItem);
+router.post("/create_item", verifyToken, authorize("Admin"), createProductItem);
+router.put(
+  "/update_item/:id",
+  verifyToken,
+  authorize("Admin"),
+  updateProductItem,
+);
+router.delete(
+  "/delete_item/:id",
+  verifyToken,
+  authorize("Admin"),
+  deleteProductItem,
+);
 
 //--------Products Attributes---------
 
@@ -89,10 +99,17 @@ import {
 } from "../controllers/product_attribubtes.controller.js";
 
 router.get("/:productId/attributes/get_all_attributes", getProductAttributes);
-router.post("/:productId/attributes/create_attibute", addProductAttribute);
+router.post(
+  "/:productId/attributes/create_attibute",
+  verifyToken,
+  authorize("Admin"),
+  addProductAttribute,
+);
 router.put("/attributes/update_attribute/:attributeId", updateProductAttribute);
 router.delete(
   "/attributes/delete_attribute/:attributeId",
+  verifyToken,
+  authorize("Admin"),
   deleteProductAttribute,
 );
 
