@@ -53,6 +53,8 @@ function escapeHtml(str) {
 }
 
 export async function sendOrderConfirmationEmail(email, orderDetails) {
+  console.log("Email function called with to:", to);
+  console.log("Order details:", JSON.stringify(orderDetails));
   // Safely format date
   const orderDate = orderDetails.order_date
     ? new Date(orderDetails.order_date).toLocaleString()
@@ -172,8 +174,15 @@ Thank you for shopping with DRIVE RANGEE!
     },
   };
 
-  await transporter.sendMail(mailOptions);
-  console.log(
-    `Order confirmation email sent to ${email} for order ${orderDetails.order_id}`,
-  );
+  try {
+    console.log("Attempting to send email...");
+    await transporter.sendMail(mailOptions);
+
+    console.log("Email sent successfully:", info.messageId);
+    console.log(
+      `Order confirmation email sent to ${email} for order ${orderDetails.order_id}`,
+    );
+  } catch (error) {
+    console.log(error);
+  }
 }
