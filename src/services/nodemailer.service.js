@@ -53,7 +53,7 @@ function escapeHtml(str) {
 }
 
 export async function sendOrderConfirmationEmail(email, orderDetails) {
-  console.log("Email function called with to:", to);
+  // console.log("Email function called with to:", to);
   console.log("Order details:", JSON.stringify(orderDetails));
   // Safely format date
   const orderDate = orderDetails.order_date
