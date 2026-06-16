@@ -8,7 +8,7 @@ import upload from "../middlewares/multer.middleware.js";
 
 router.get(
   "/get_all_categories",
-  verifyToken,
+
   categoryController.getAllCategories,
 );
 router.get(

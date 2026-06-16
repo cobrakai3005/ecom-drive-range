@@ -56,7 +56,7 @@ app.use("/api/guests/token", guestTokenRoute);
 app.use("/api/carts", cartRoutes);
 app.use("/api/orders", orderRoutes);
 app.use("/api/coupons", couponRoutes);
-app.use("/api/payment-methods", paymentMothodsRoutes);
+// app.use("/api/payment-methods", paymentMothodsRoutes);
 app.use("/api/transactions", transactionsRoutes);
 
 app.use("/api/returns", returnsRoutes);
