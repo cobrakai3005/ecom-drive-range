@@ -135,7 +135,20 @@ export const getAllProducts = async (req, res) => {
 export const getProductByIdOrSlug = async (req, res) => {
   const identifier = req.params.identifier;
   try {
-    let query = "SELECT * FROM products WHERE id = ? OR slug = ?";
+    let query = `
+    SELECT 
+    p.*,
+    b.name AS brand_name,
+    c.name AS category_name,
+    s.name AS subcategory_name
+FROM products p
+LEFT JOIN brands b ON p.brand_id = b.id
+LEFT JOIN categories c ON p.category_id = c.id
+LEFT JOIN subcategory s ON p.sub_category_id = s.id
+WHERE p.id = ? OR p.slug = ?;
+    
+    
+    `;
     const [rows] = await pool.query(query, [identifier, identifier]);
     if (rows.length === 0) {
       return res
