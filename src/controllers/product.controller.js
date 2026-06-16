@@ -136,11 +136,18 @@ export const getProductByIdOrSlug = async (req, res) => {
   const identifier = req.params.identifier;
   try {
     let query = `
-    SELECT 
+   SELECT 
     p.*,
     b.name AS brand_name,
     c.name AS category_name,
-    s.name AS subcategory_name
+    s.name AS subcategory_name,
+    (
+        SELECT image_url 
+        FROM product_images 
+        WHERE product_id = p.id 
+        ORDER BY sort_order ASC 
+        LIMIT 1
+    ) AS primary_image_url
 FROM products p
 LEFT JOIN brands b ON p.brand_id = b.id
 LEFT JOIN categories c ON p.category_id = c.id
