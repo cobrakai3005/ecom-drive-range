@@ -15,6 +15,60 @@ const isSkuUnique = async (sku, excludeId = null) => {
 };
 
 //  GET product items with filters, pagination
+// export const getAllProductItems = async (req, res) => {
+//   try {
+//     const page = parseInt(req.query.page) || 1;
+//     const limit = parseInt(req.query.limit) || 10;
+//     const offset = (page - 1) * limit;
+//     const { product_id, is_available, sku } = req.query;
+
+//     let whereConditions = [];
+//     let params = [];
+
+//     if (product_id) {
+//       whereConditions.push("product_id = ?");
+//       params.push(product_id);
+//     }
+
+//     if (is_available !== undefined) {
+//       whereConditions.push("is_available = ?");
+//       params.push(is_available === "true");
+//     }
+//     if (sku) {
+//       whereConditions.push("sku LIKE ?");
+//       params.push(`%${sku}%`);
+//     }
+
+//     const whereClause = whereConditions.length
+//       ? `WHERE ${whereConditions.join(" AND ")}`
+//       : "";
+
+//     const [countResult] = await pool.query(
+//       `SELECT COUNT(*) as total FROM product_items ${whereClause}`,
+//       params,
+//     );
+//     const total = countResult[0].total;
+
+//     const [rows] = await pool.query(
+//       `SELECT pi.*
+//             FROM product_items pi
+//             ${whereClause}
+//             ORDER BY pi.id ASC
+//             LIMIT ? OFFSET ?`,
+//       [...params, limit, offset],
+//     );
+
+//     res.json({
+//       success: true,
+//       data: rows,
+//       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+//     });
+//   } catch (error) {
+//     console.error(error);
+//     res.status(500).json({ success: false, message: "Server error" });
+//   }
+// };
+
 export const getAllProductItems = async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -22,46 +76,109 @@ export const getAllProductItems = async (req, res) => {
     const offset = (page - 1) * limit;
     const { product_id, is_available, sku } = req.query;
 
-    let whereConditions = [];
-    let params = [];
+    // Build dynamic WHERE clause
+    const filters = [];
+    const params = [];
 
     if (product_id) {
-      whereConditions.push("product_id = ?");
+      filters.push("pi.product_id = ?");
       params.push(product_id);
     }
-
     if (is_available !== undefined) {
-      whereConditions.push("is_available = ?");
+      filters.push("pi.is_available = ?");
       params.push(is_available === "true");
     }
     if (sku) {
-      whereConditions.push("sku LIKE ?");
+      filters.push("pi.sku LIKE ?");
       params.push(`%${sku}%`);
     }
 
-    const whereClause = whereConditions.length
-      ? `WHERE ${whereConditions.join(" AND ")}`
-      : "";
+    const whereClause = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
 
+    // Count total items (only product_items table, for pagination)
     const [countResult] = await pool.query(
-      `SELECT COUNT(*) as total FROM product_items ${whereClause}`,
+      `SELECT COUNT(*) as total FROM product_items pi ${whereClause}`,
       params,
     );
     const total = countResult[0].total;
 
-    const [rows] = await pool.query(
-      `SELECT pi.*
-             FROM product_items pi
-             ${whereClause}
-             ORDER BY pi.id ASC
-             LIMIT ? OFFSET ?`,
-      [...params, limit, offset],
-    );
+    // Main query with JOINs
+    const query = `
+      SELECT 
+        pi.*,
+        p.id AS product_id,
+        p.name AS product_name,
+        p.slug AS product_slug,
+        p.short_description AS product_short_desc,
+        p.long_description AS product_long_desc,
+        p.status AS product_status,
+        c.name AS category_name,
+        sc.name AS sub_category_name,
+        b.name AS brand_name,
+        (
+          SELECT JSON_ARRAYAGG(
+            JSON_OBJECT('id', img.id, 'url', img.image_url, 'sort_order', img.sort_order)
+          )
+          FROM product_images img
+          WHERE img.product_id = p.id
+        ) AS images
+      FROM product_items pi
+      JOIN products p ON pi.product_id = p.id
+      LEFT JOIN categories c ON p.category_id = c.id
+      LEFT JOIN subcategory sc ON p.sub_category_id = sc.id
+      LEFT JOIN brands b ON p.brand_id = b.id
+      ${whereClause}
+      ORDER BY pi.id ASC
+      LIMIT ? OFFSET ?
+    `;
+
+    const [rows] = await pool.query(query, [...params, limit, offset]);
+
+    // Transform rows to nest product details under a 'product' key
+    const data = rows.map((row) => {
+      // Extract product-related fields
+      const {
+        product_name,
+        product_slug,
+        product_short_desc,
+        product_long_desc,
+        product_status,
+        category_name,
+        sub_category_name,
+        brand_name,
+        images,
+        ...itemFields
+      } = row;
+
+      // Remove product_id from itemFields if you prefer to keep product.id inside product object
+      const product = {
+        id: row.product_id,
+        name: product_name,
+        slug: product_slug,
+        short_description: product_short_desc,
+        long_description: product_long_desc,
+        status: product_status,
+        category: category_name,
+        sub_category: sub_category_name,
+        brand: brand_name,
+        images: images || [], // images will be an array of objects or null
+      };
+
+      return {
+        ...itemFields,
+        product,
+      };
+    });
 
     res.json({
       success: true,
-      data: rows,
-      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+      data,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
     });
   } catch (error) {
     console.error(error);
