@@ -69,7 +69,7 @@ export const registerController = async (req, res) => {
     ]);
 
     // Send OTP email
-    await sendOTPEmail(email, otp);
+    //await sendOTPEmail(email, otp);
 
     return res.status(201).json({
       message: `Enter OTP sent to ${email}`,
