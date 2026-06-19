@@ -208,7 +208,7 @@ export const addToCart = async (req, res) => {
 export const updateCartItem = async (req, res) => {
   const { itemId } = req.params; // product_item_id
   const { quantity } = req.body;
-  if (!quantity || quantity <= 0) {
+  if (!parseInt(quantity) || parseInt(quantity) <= 0) {
     return res
       .status(400)
       .json({ success: false, message: "Quantity must be positive" });
