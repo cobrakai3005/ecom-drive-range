@@ -187,22 +187,103 @@ export const getAllProductItems = async (req, res) => {
 };
 
 //  GET single product item by id
+// export const getProductItemById = async (req, res) => {
+//   const { id } = req.params;
+//   try {
+//     const [rows] = await pool.query(
+//       `SELECT pi.*
+//              FROM product_items pi
+
+//              WHERE pi.id = ?`,
+//       [id],
+//     );
+//     if (rows.length === 0) {
+//       return res
+//         .status(404)
+//         .json({ success: false, message: "Product item not found" });
+//     }
+//     res.json({ success: true, data: rows[0] });
+//   } catch (error) {
+//     console.error(error);
+//     res.status(500).json({ success: false, message: "Server error" });
+//   }
+// };
+
 export const getProductItemById = async (req, res) => {
   const { id } = req.params;
   try {
-    const [rows] = await pool.query(
-      `SELECT pi.*
-             FROM product_items pi
+    const query = `
+      SELECT 
+        pi.*,
+        p.id AS product_id,
+        p.name AS product_name,
+        p.slug AS product_slug,
+        p.short_description AS product_short_desc,
+        p.long_description AS product_long_desc,
+        p.status AS product_status,
+        c.name AS category_name,
+        sc.name AS sub_category_name,
+        b.name AS brand_name,
+        (
+          SELECT JSON_ARRAYAGG(
+            JSON_OBJECT('id', img.id, 'url', img.image_url, 'sort_order', img.sort_order)
+          )
+          FROM product_images img
+          WHERE img.product_id = p.id
+        ) AS images
+      FROM product_items pi
+      JOIN products p ON pi.product_id = p.id
+      LEFT JOIN categories c ON p.category_id = c.id
+      LEFT JOIN subcategory sc ON p.sub_category_id = sc.id
+      LEFT JOIN brands b ON p.brand_id = b.id
+      WHERE pi.id = ?
+    `;
 
-             WHERE pi.id = ?`,
-      [id],
-    );
+    const [rows] = await pool.query(query, [id]);
+
     if (rows.length === 0) {
       return res
         .status(404)
         .json({ success: false, message: "Product item not found" });
     }
-    res.json({ success: true, data: rows[0] });
+
+    const row = rows[0];
+
+    // Extract product fields and separate them from product_item fields
+    const {
+      product_name,
+      product_slug,
+      product_short_desc,
+      product_long_desc,
+      product_status,
+      category_name,
+      sub_category_name,
+      brand_name,
+      images,
+      ...itemFields
+    } = row;
+
+    // Build the nested product object
+    const product = {
+      id: row.product_id,
+      name: product_name,
+      slug: product_slug,
+      short_description: product_short_desc,
+      long_description: product_long_desc,
+      status: product_status,
+      category: category_name,
+      sub_category: sub_category_name,
+      brand: brand_name,
+      images: images || [], // ensure array (null becomes empty array)
+    };
+
+    // Combine product_item fields with nested product
+    const data = {
+      ...itemFields,
+      product,
+    };
+
+    res.json({ success: true, data });
   } catch (error) {
     console.error(error);
     res.status(500).json({ success: false, message: "Server error" });
