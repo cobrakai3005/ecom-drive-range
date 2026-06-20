@@ -18,7 +18,7 @@ import {
 
 //  Customer & Admin Routes
 // GET /api/addresses – Get addresses (customer: own active; admin: all)
-router.get("/", verifyToken, authorize("Admin"), getAllAddresses);
+router.get("/", verifyToken, authorize("Admin", "Customer"), getAllAddresses);
 
 // GET /api/user-addresses/:addressId – Get single address
 router.get(
