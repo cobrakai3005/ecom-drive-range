@@ -16,9 +16,9 @@ const router = express.Router();
 
 router.post("/login", login);
 router.post("/register", upload.single("profile_image"), register);
+router.post("/logout", verifyToken, logout);
 router.post("/verify-otp", verifyOTP);
 router.post("/resend", resendOtp);
-router.post("/logout", verifyToken, logout);
 router.post("/forget-password", verifyToken, forgetPassword);
 router.patch(
   "/update-profile-image",
