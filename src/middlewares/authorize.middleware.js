@@ -3,13 +3,10 @@ import pool from "../config/db.js";
 export function authorize(...allowedRoles) {
   return (req, res, next) => {
     const userRole = req.user.role;
-    console.log(userRole);
-    console.log(allowedRoles);
-    
+
     if (allowedRoles.includes(userRole)) {
       next(); // allowed
     } else {
-      
       res.status(403).json({ success: false, message: "Access denied" });
     }
   };
