@@ -2,16 +2,22 @@ import express from "express";
 import { config } from "dotenv";
 import cors from "cors";
 import { connect } from "./config/db.js";
+import cookie from 'cookie-parser'
 config();
 
 const app = express();
 const port = process.env.PORT;
 
 app.use(express.json());
+app.use(cookie())
 app.use(express.urlencoded({ extended: true }));
 app.use(
   cors({
-    origin: [process.env.FRONTEND_URL, "http://localhost:5173", "https://full4-4.vercel.app"],
+    origin: [
+      process.env.FRONTEND_URL,
+      "http://localhost:5173",
+      "https://full4-4.vercel.app",
+    ],
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
     credentials: true,
   }),

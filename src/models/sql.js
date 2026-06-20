@@ -2,7 +2,7 @@ export const sql = `
         CREATE TABLE IF NOT EXISTS users (
     id INT AUTO_INCREMENT PRIMARY KEY,
 
-    role ENUM('Customer', 'Admin', 'Staff') DEFAULT 'Staff',
+    role ENUM('Customer', 'Admin', 'Staff') DEFAULT 'Customer',
 
     profile_image TEXT,
 
