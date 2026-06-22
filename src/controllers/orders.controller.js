@@ -513,13 +513,63 @@ export const updateOrderStatus = async (req, res) => {
 };
 
 // ========== ADMIN: get all orders (with pagination & filters) ==========
+// export const getAllOrders = async (req, res) => {
+//   const page = parseInt(req.query.page) || 1;
+//   const limit = parseInt(req.query.limit) || 10;
+//   const offset = (page - 1) * limit;
+//   const status = req.query.status;
+//   let whereClause = "";
+//   let params = [];
+//   if (
+//     status &&
+//     [
+//       "pending",
+//       "confirmed",
+//       "processing",
+//       "shipped",
+//       "delivered",
+//       "cancelled",
+//       "refunded",
+//     ].includes(status)
+//   ) {
+//     whereClause = "WHERE order_status = ?";
+//     params.push(status);
+//   }
+//   try {
+//     const [countResult] = await pool.query(
+//       `SELECT COUNT(*) as total FROM orders ${whereClause}`,
+//       params,
+//     );
+//     const total = countResult[0].total;
+//     const [rows] = await pool.query(
+//       `SELECT o.*, u.full_name as customer_name
+//              FROM orders o
+//              LEFT JOIN users u ON o.user_id = u.id
+//              ${whereClause}
+//              ORDER BY o.order_date DESC
+//              LIMIT ? OFFSET ?`,
+//       [...params, limit, offset],
+//     );
+//     res.json({
+//       success: true,
+//       data: rows,
+//       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+//     });
+//   } catch (error) {
+//     console.error(error);
+//     res.status(500).json({ success: false, message: "Server error" });
+//   }
+// };
+
 export const getAllOrders = async (req, res) => {
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 10;
   const offset = (page - 1) * limit;
   const status = req.query.status;
+
   let whereClause = "";
   let params = [];
+
   if (
     status &&
     [
@@ -532,28 +582,207 @@ export const getAllOrders = async (req, res) => {
       "refunded",
     ].includes(status)
   ) {
-    whereClause = "WHERE order_status = ?";
+    whereClause = "WHERE o.order_status = ?";
     params.push(status);
   }
+
   try {
+    // Get total count
     const [countResult] = await pool.query(
-      `SELECT COUNT(*) as total FROM orders ${whereClause}`,
+      `SELECT COUNT(*) as total FROM orders o ${whereClause}`,
       params,
     );
     const total = countResult[0].total;
-    const [rows] = await pool.query(
-      `SELECT o.*, u.full_name as customer_name
-             FROM orders o
-             LEFT JOIN users u ON o.user_id = u.id
-             ${whereClause}
-             ORDER BY o.order_date DESC
-             LIMIT ? OFFSET ?`,
+
+    // Get orders with user and address details
+    const [orders] = await pool.query(
+      `SELECT 
+        o.*,
+        u.full_name as customer_name,
+        u.email as customer_email,
+        u.phone as customer_phone,
+        u.profile_image as customer_profile_image,
+        u.role as customer_role,
+        -- Shipping Address
+        sa.full_name as shipping_full_name,
+        sa.phone as shipping_phone,
+        sa.line1 as shipping_line1,
+        sa.line2 as shipping_line2,
+        sa.landmark as shipping_landmark,
+        sa.city as shipping_city,
+        sa.state as shipping_state,
+        sa.postal_code as shipping_postal_code,
+        sa.country as shipping_country,
+        CONCAT_WS(', ',
+          sa.line1,
+          sa.line2,
+          sa.landmark,
+          sa.city,
+          sa.state,
+          sa.postal_code,
+          sa.country
+        ) as shipping_full_address,
+        -- Billing Address
+        ba.full_name as billing_full_name,
+        ba.phone as billing_phone,
+        ba.line1 as billing_line1,
+        ba.line2 as billing_line2,
+        ba.landmark as billing_landmark,
+        ba.city as billing_city,
+        ba.state as billing_state,
+        ba.postal_code as billing_postal_code,
+        ba.country as billing_country,
+        CONCAT_WS(', ',
+          ba.line1,
+          ba.line2,
+          ba.landmark,
+          ba.city,
+          ba.state,
+          ba.postal_code,
+          ba.country
+        ) as billing_full_address
+      FROM orders o
+      LEFT JOIN users u ON o.user_id = u.id
+      LEFT JOIN user_addresses sa ON o.shipping_address_id = sa.id
+      LEFT JOIN user_addresses ba ON o.billing_address_id = ba.id
+      ${whereClause}
+      ORDER BY o.order_date DESC
+      LIMIT ? OFFSET ?`,
       [...params, limit, offset],
     );
+
+    // Get order items for all orders
+    const orderIds = orders.map((order) => order.id);
+    let orderItemsMap = {};
+
+    if (orderIds.length > 0) {
+      // Get all order items with product and variation details
+      const [items] = await pool.query(
+        `SELECT 
+          oi.*,
+          oi.product_data_snapshot as product_snapshot,
+          p.name as product_name,
+          p.slug as product_slug,
+          p.status as product_status,
+          pi.sku as product_sku,
+          pi.variation_value as variation,
+          pi.price as current_price,
+          pi.weight,
+          pi.width,
+          pi.height,
+          pi.depth,
+          pi.is_available,
+          pi.available_stock
+        FROM order_items oi
+        LEFT JOIN product_items pi ON oi.product_item_id = pi.id
+        LEFT JOIN products p ON pi.product_id = p.id
+        WHERE oi.order_id IN (?)
+        ORDER BY oi.order_id, oi.id`,
+        [orderIds],
+      );
+
+      // Group items by order_id
+      orderItemsMap = items.reduce((acc, item) => {
+        if (!acc[item.order_id]) {
+          acc[item.order_id] = [];
+        }
+        // Parse the JSON snapshot or use the individual fields
+        let productSnapshot = item.product_snapshot;
+        if (typeof productSnapshot === "string") {
+          try {
+            productSnapshot = JSON.parse(productSnapshot);
+          } catch (e) {
+            productSnapshot = {};
+          }
+        }
+
+        acc[item.order_id].push({
+          id: item.id,
+          product_item_id: item.product_item_id,
+          quantity: item.quantity,
+          unit_price: item.unit_price,
+          total_price: item.total_price,
+          product: {
+            id: item.product_id,
+            name: item.product_name || productSnapshot?.product_name,
+            slug: item.product_slug,
+            sku: item.product_sku || productSnapshot?.sku,
+            variation: item.variation || productSnapshot?.variation,
+            status: item.product_status,
+            current_price: item.current_price,
+            weight: item.weight,
+            dimensions: {
+              width: item.width,
+              height: item.height,
+              depth: item.depth,
+            },
+            is_available: item.is_available,
+            available_stock: item.available_stock,
+            snapshot: productSnapshot, // Keep the full snapshot for reference
+          },
+        });
+        return acc;
+      }, {});
+    }
+
+    // Combine orders with their items and calculate summary
+    const ordersWithDetails = orders.map((order) => ({
+      ...order,
+      items: orderItemsMap[order.id] || [],
+      item_count: orderItemsMap[order.id]?.length || 0,
+      summary: {
+        subtotal: order.subtotal,
+        shipping_cost: order.shipping_cost,
+        tax_amount: order.tax_amount,
+        discount_amount: order.discount_amount,
+        total_amount: order.total_amount,
+        currency: order.currency_code,
+      },
+      customer: {
+        id: order.user_id,
+        name: order.customer_name,
+        email: order.customer_email,
+        phone: order.customer_phone,
+        profile_image: order.customer_profile_image,
+        role: order.customer_role,
+      },
+      shipping_address: {
+        id: order.shipping_address_id,
+        full_name: order.shipping_full_name,
+        phone: order.shipping_phone,
+        line1: order.shipping_line1,
+        line2: order.shipping_line2,
+        landmark: order.shipping_landmark,
+        city: order.shipping_city,
+        state: order.shipping_state,
+        postal_code: order.shipping_postal_code,
+        country: order.shipping_country,
+        full_address: order.shipping_full_address,
+      },
+      billing_address: {
+        id: order.billing_address_id,
+        full_name: order.billing_full_name,
+        phone: order.billing_phone,
+        line1: order.billing_line1,
+        line2: order.billing_line2,
+        landmark: order.billing_landmark,
+        city: order.billing_city,
+        state: order.billing_state,
+        postal_code: order.billing_postal_code,
+        country: order.billing_country,
+        full_address: order.billing_full_address,
+      },
+    }));
+
     res.json({
       success: true,
-      data: rows,
-      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+      data: ordersWithDetails,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
     });
   } catch (error) {
     console.error(error);

@@ -89,7 +89,8 @@ CREATE TABLE IF NOT EXISTS brands (
     id INT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
     logo_url VARCHAR(255),
-    website VARCHAR(255)
+    website VARCHAR(255),
+    status ENUM('active', 'inactive') DEFAULT 'active' NOT NULL
 );
 
 
