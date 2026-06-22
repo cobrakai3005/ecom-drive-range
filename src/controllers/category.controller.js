@@ -3,6 +3,88 @@ import cloudinary from "../config/cloudinary.js";
 import { pool } from "../config/db.js";
 
 // Get all categories with pagination and status filter
+// export const getAllCategories = async (req, res) => {
+//   try {
+//     // Query parameters
+//     const page = parseInt(req.query.page) || 1;
+//     const limit = parseInt(req.query.limit) || 10;
+//     const status = req.query.status; // 'active', 'inactive', or undefined (all)
+//     const offset = (page - 1) * limit;
+
+//     // Base query parts
+//     let whereClause = "";
+//     let params = [];
+
+//     whereClause = "WHERE status = ?";
+//     if (status && ["active", "inactive"].includes(status)) {
+//       params.push(status);
+//     } else {
+//       params.push("active");
+//     }
+
+//     // Get total count for pagination metadata
+//     const countQuery = `SELECT COUNT(*) as total FROM categories ${whereClause}`;
+//     const [countResult] = await pool.query(countQuery, params);
+//     const total = countResult[0].total;
+
+//     // Get paginated data
+//     const dataQuery = `
+//             SELECT * FROM categories
+//             ${whereClause}
+//             ORDER BY display_order ASC, id ASC
+//             LIMIT ? OFFSET ?
+//         `;
+//     const dataParams = [...params, limit, offset];
+//     const [rows] = await pool.query(dataQuery, dataParams);
+
+//     res.json({
+//       success: true,
+//       data: rows,
+//       pagination: {
+//         page,
+//         limit,
+//         total,
+//         totalPages: Math.ceil(total / limit),
+//       },
+//     });
+//   } catch (error) {
+//     console.error(error);
+//     res.status(500).json({ success: false, message: "Server error" });
+//   }
+// };
+
+// // Get single category by id – now accepts optional ?status= query param
+// export const getCategoryById = async (req, res) => {
+//   const { id } = req.params;
+//   const { status } = req.query; // 'active' or 'inactive' (optional)
+
+//   try {
+//     let query = "SELECT * FROM categories WHERE id = ?";
+//     const params = [id];
+
+//     query += " AND status = ?";
+//     if (status && ["active", "inactive"].includes(status)) {
+//       params.push(status);
+//     } else {
+//       params.push("active");
+//     }
+
+//     const [rows] = await pool.query(query, params);
+//     if (rows.length === 0) {
+//       return res.status(404).json({
+//         success: false,
+//         message: status
+//           ? `Category not found with id ${id} and status ${status}`
+//           : "Category not found",
+//       });
+//     }
+//     res.json({ success: true, data: rows[0] });
+//   } catch (error) {
+//     console.error(error);
+//     res.status(500).json({ success: false, message: "Server error" });
+//   }
+// };
+
 export const getAllCategories = async (req, res) => {
   try {
     // Query parameters
@@ -31,7 +113,7 @@ export const getAllCategories = async (req, res) => {
     const dataQuery = `
             SELECT * FROM categories 
             ${whereClause}
-            ORDER BY display_order ASC, id ASC
+            ORDER BY id ASC  
             LIMIT ? OFFSET ?
         `;
     const dataParams = [...params, limit, offset];
@@ -86,11 +168,47 @@ export const getCategoryById = async (req, res) => {
 };
 
 // Create a new category (unchanged)
+// export const createCategory = async (req, res) => {
+//   const { name, description, display_order, status, is_front } = req.body;
+
+//   // Get Cloudinary URL from uploaded file
+//   const image_url = req.file ? req.file.path : null; // 'path' contains the secure URL
+//   if (!name || name.trim() === "") {
+//     return res
+//       .status(400)
+//       .json({ success: false, message: "Name is required" });
+//   }
+
+//   try {
+//     const [result] = await pool.query(
+//       `INSERT INTO categories (name, description, image_url, display_order, status, is_front)
+//              VALUES (?, ?, ?, ?, ?, ?)`,
+//       [
+//         name,
+//         description || null,
+//         image_url || null,
+//         display_order || 0,
+//         status || "active",
+//         Boolean(is_front) || 0
+//       ],
+//     );
+//     const [newCategory] = await pool.query(
+//       "SELECT * FROM categories WHERE id = ?",
+//       [result.insertId],
+//     );
+//     res.status(201).json({ success: true, data: newCategory[0] });
+//   } catch (error) {
+//     console.error(error);
+//     res.status(500).json({ success: false, message: "Database error" });
+//   }
+// };
+
 export const createCategory = async (req, res) => {
-  const { name, description, display_order, status } = req.body;
+  const { name, description, status, is_front } = req.body; // ✅ Removed display_order
 
   // Get Cloudinary URL from uploaded file
   const image_url = req.file ? req.file.path : null; // 'path' contains the secure URL
+
   if (!name || name.trim() === "") {
     return res
       .status(400)
@@ -98,21 +216,27 @@ export const createCategory = async (req, res) => {
   }
 
   try {
+    // Explicitly convert to 1 or 0
+    const isFrontValue =
+      is_front === true || is_front === "true" || is_front === 1 ? 1 : 0;
+
     const [result] = await pool.query(
-      `INSERT INTO categories (name, description, image_url, display_order, status)
+      `INSERT INTO categories (name, description, image_url, status, is_front)  
              VALUES (?, ?, ?, ?, ?)`,
       [
         name,
         description || null,
         image_url || null,
-        display_order || 0,
         status || "active",
+        isFrontValue, // ✅ Now always 1 or 0
       ],
     );
+
     const [newCategory] = await pool.query(
       "SELECT * FROM categories WHERE id = ?",
       [result.insertId],
     );
+
     res.status(201).json({ success: true, data: newCategory[0] });
   } catch (error) {
     console.error(error);
@@ -136,13 +260,13 @@ export const updateCategory = async (req, res) => {
         .json({ success: false, message: "Category not found" });
     }
 
-    const { name, description, display_order, status } = req.body;
+    const { name, description, status, is_front } = req.body; // Removed display_order
     let image_url = existing[0].image_url; // keep old by default
 
     // If new file uploaded, use its URL
     if (req.file) {
       image_url = req.file.path;
-      //   Optional: delete old image from Cloudinary to save space
+      // Optional: delete old image from Cloudinary to save space
       const publicId = existing[0].image_url
         .split("/")
         .slice(-2)
@@ -151,15 +275,29 @@ export const updateCategory = async (req, res) => {
       await cloudinary.uploader.destroy(publicId);
     }
 
+    // ✅ Fixed: Explicitly convert is_front to 1 or 0
+    const isFrontValue =
+      is_front === true || is_front === "true" || is_front === 1 ? 1 : 0;
+
+    console.log("is_front received:", is_front);
+    console.log("isFrontValue stored:", isFrontValue);
+
     await pool.query(
       `UPDATE categories
              SET name = COALESCE(?, name),
                  description = COALESCE(?, description),
                  image_url = ?,
-                 display_order = COALESCE(?, display_order),
-                 status = COALESCE(?, status)
+                 status = COALESCE(?, status),
+                 is_front = ? 
              WHERE id = ?`,
-      [name, description, image_url, display_order, status, id],
+      [
+        name || null,
+        description || null,
+        image_url,
+        status || null,
+        isFrontValue, // ✅ Now always 1 or 0
+        id,
+      ],
     );
 
     const [updated] = await pool.query(

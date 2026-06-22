@@ -62,7 +62,8 @@ CREATE TABLE IF NOT EXISTS categories (
     name VARCHAR(100) NOT NULL,
     description TEXT,
     image_url VARCHAR(255),
-    display_order INT DEFAULT 0,
+ 
+    is_front BOOLEAN DEFAULT 0 NOT NULL ,
     status ENUM('active', 'inactive') DEFAULT 'active'
 );
 
@@ -75,7 +76,8 @@ CREATE TABLE IF NOT EXISTS subcategory (
     name VARCHAR(100) NOT NULL,
     description TEXT,
     image_url VARCHAR(255),
-    display_order INT DEFAULT 0,
+    is_front TINYINT(1) DEFAULT 0 NOT NULL, 
+
     status ENUM('active', 'inactive') DEFAULT 'active',
     FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE RESTRICT ON UPDATE CASCADE
 );

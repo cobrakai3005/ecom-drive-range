@@ -58,7 +58,7 @@ export const deactivateUser = async (req, res) => {
 export const getUsers = async (req, res) => {
   try {
     const [users] = await pool.query(
-      `SELECT id, full_name, email, phone, profile_image, role FROM users`,
+      `SELECT id, full_name, email, phone,is_delete, profile_image, role FROM users`,
     );
 
     return res.status(200).json({
@@ -66,6 +66,8 @@ export const getUsers = async (req, res) => {
       data: users,
     });
   } catch (error) {
+    console.log(error);
+    
     console.log(`Error in Geting the users ${error}`);
 
     return res.status(500).json({

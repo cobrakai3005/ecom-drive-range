@@ -14,60 +14,6 @@ const isSkuUnique = async (sku, excludeId = null) => {
   return rows.length === 0;
 };
 
-//  GET product items with filters, pagination
-// export const getAllProductItems = async (req, res) => {
-//   try {
-//     const page = parseInt(req.query.page) || 1;
-//     const limit = parseInt(req.query.limit) || 10;
-//     const offset = (page - 1) * limit;
-//     const { product_id, is_available, sku } = req.query;
-
-//     let whereConditions = [];
-//     let params = [];
-
-//     if (product_id) {
-//       whereConditions.push("product_id = ?");
-//       params.push(product_id);
-//     }
-
-//     if (is_available !== undefined) {
-//       whereConditions.push("is_available = ?");
-//       params.push(is_available === "true");
-//     }
-//     if (sku) {
-//       whereConditions.push("sku LIKE ?");
-//       params.push(`%${sku}%`);
-//     }
-
-//     const whereClause = whereConditions.length
-//       ? `WHERE ${whereConditions.join(" AND ")}`
-//       : "";
-
-//     const [countResult] = await pool.query(
-//       `SELECT COUNT(*) as total FROM product_items ${whereClause}`,
-//       params,
-//     );
-//     const total = countResult[0].total;
-
-//     const [rows] = await pool.query(
-//       `SELECT pi.*
-//             FROM product_items pi
-//             ${whereClause}
-//             ORDER BY pi.id ASC
-//             LIMIT ? OFFSET ?`,
-//       [...params, limit, offset],
-//     );
-
-//     res.json({
-//       success: true,
-//       data: rows,
-//       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
-//     });
-//   } catch (error) {
-//     console.error(error);
-//     res.status(500).json({ success: false, message: "Server error" });
-//   }
-// };
 
 export const getAllProductItems = async (req, res) => {
   try {
@@ -186,28 +132,6 @@ export const getAllProductItems = async (req, res) => {
   }
 };
 
-//  GET single product item by id
-// export const getProductItemById = async (req, res) => {
-//   const { id } = req.params;
-//   try {
-//     const [rows] = await pool.query(
-//       `SELECT pi.*
-//              FROM product_items pi
-
-//              WHERE pi.id = ?`,
-//       [id],
-//     );
-//     if (rows.length === 0) {
-//       return res
-//         .status(404)
-//         .json({ success: false, message: "Product item not found" });
-//     }
-//     res.json({ success: true, data: rows[0] });
-//   } catch (error) {
-//     console.error(error);
-//     res.status(500).json({ success: false, message: "Server error" });
-//   }
-// };
 
 export const getProductItemById = async (req, res) => {
   const { id } = req.params;
