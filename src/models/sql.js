@@ -221,12 +221,14 @@ CREATE TABLE IF NOT EXISTS product_images (
     product_id INT NOT NULL,
     image_url VARCHAR(500) NOT NULL,
     sort_order INT DEFAULT 0,
+    status ENUM('active', 'inactive') DEFAULT 'active' NOT NULL,  -- ✅ Added
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     
     FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE ON UPDATE CASCADE,
     
     INDEX idx_product_id (product_id),
-    INDEX idx_sort_order (sort_order)
+    INDEX idx_sort_order (sort_order),
+    INDEX idx_status (status)  -- ✅ Recommended for faster queries
 );
 
 -- ===========================================

@@ -1,116 +1,119 @@
-  import express from "express";
-  import {
-    createProduct,
-    deleteProduct,
-    getAllProducts,
-    getProductByIdOrSlug,
-    toggleProductStatus,
-    updateProduct,
-  } from "../controllers/product.controller.js";
-  import verifyToken from "../middlewares/auth.middleware.js";
-  import { authorize } from "../middlewares/authorize.middleware.js";
-  import upload from "../middlewares/multer.middleware.js";
-  const router = express.Router();
+import express from "express";
+import {
+  createProduct,
+  deleteProduct,
+  getAllProducts,
+  getProductByIdOrSlug,
+  toggleProductStatus,
+  updateProduct,
+} from "../controllers/product.controller.js";
+import verifyToken from "../middlewares/auth.middleware.js";
+import { authorize } from "../middlewares/authorize.middleware.js";
+import upload from "../middlewares/multer.middleware.js";
+const router = express.Router();
 
-  router.get("/get_all_products", getAllProducts);
-  router.get("/get_product_by_id/:identifier", getProductByIdOrSlug);
-  router.post("/create_product", verifyToken, authorize("Admin"), createProduct);
-  router.put(
-    "/update_product/:id",
-    verifyToken,
-    authorize("Admin"),
-    updateProduct,
-  );
-  router.delete(
-    "/delete_product/:id",
-    verifyToken,
-    authorize("Admin"),
-    deleteProduct,
-  );
-  router.patch(
-    "/toggle_status/:id",
-    verifyToken,
-    authorize("Admin"),
-    toggleProductStatus,
-  );
+router.get("/get_all_products", getAllProducts);
+router.get("/get_product_by_id/:identifier", getProductByIdOrSlug);
+router.post("/create_product", verifyToken, authorize("Admin"), createProduct);
+router.put(
+  "/update_product/:id",
+  verifyToken,
+  authorize("Admin"),
+  updateProduct,
+);
+router.delete(
+  "/delete_product/:id",
+  verifyToken,
+  authorize("Admin"),
+  deleteProduct,
+);
+router.patch(
+  "/toggle_status/:id",
+  verifyToken,
+  authorize("Admin"),
+  toggleProductStatus,
+);
 
-  // Product images
+// Product images
 
-  import {
-    getProductImages,
-    addProductImage,
-    deleteProductImage,
-    reorderProductImages,
-  } from "../controllers/product_images.controller.js";
+import {
+  getProductImages,
+  addProductImage,
+  deleteProductImage,
+  reorderProductImages,
+  toggleImageStatus,
+} from "../controllers/product_images.controller.js";
 
-  router.get("/:productId/images", getProductImages);
-  router.post(
-    "/:productId/images",
-    verifyToken,
-    authorize("Admin", "Staff"),
-    upload.single("product_images"),
-    addProductImage,
-  );
-  router.delete(
-    "/images/:imageId",
-    verifyToken,
-    authorize("Admin", "Staff"),
-    deleteProductImage,
-  );
-  router.patch(
-    "/:productId/images/reorder",
-    verifyToken,
-    authorize("Admin", "Staff"),
-    reorderProductImages,
-  );
+router.get("/:productId/images", getProductImages);
+router.post(
+  "/:productId/images",
+  verifyToken,
+  authorize("Admin", "Staff"),
+  upload.single("product_images"),
+  addProductImage,
+);
+router.delete(
+  "/images/:imageId",
+  verifyToken,
+  authorize("Admin", "Staff"),
+  deleteProductImage,
+);  
+router.patch(
+  "/:productId/images/reorder",
+  verifyToken,
+  authorize("Admin", "Staff"),
+  reorderProductImages,
+);
 
-  //--------Products Items---------
-  import {
-    getAllProductItems,
-    getProductItemById,
-    createProductItem,
-    updateProductItem,
-    deleteProductItem,
-  } from "../controllers/product_items.controller.js";
+router.patch("/images/:imageId/toggle-status", toggleImageStatus);
 
-  router.get("/get_all_items", getAllProductItems);
-  router.get("/get_item_by_id/:id", getProductItemById);
-  router.post("/create_item", verifyToken, authorize("Admin"), createProductItem);
-  router.put(
-    "/update_item/:id",
-    verifyToken,
-    authorize("Admin"),
-    updateProductItem,
-  );
-  router.delete(
-    "/delete_item/:id",
-    verifyToken,
-    authorize("Admin"),
-    deleteProductItem,
-  );
+//--------Products Items---------
+import {
+  getAllProductItems,
+  getProductItemById,
+  createProductItem,
+  updateProductItem,
+  deleteProductItem,
+} from "../controllers/product_items.controller.js";
 
-  //--------Products Attributes---------
+router.get("/get_all_items", getAllProductItems);
+router.get("/get_item_by_id/:id", getProductItemById);
+router.post("/create_item", verifyToken, authorize("Admin"), createProductItem);
+router.put(
+  "/update_item/:id",
+  verifyToken,
+  authorize("Admin"),
+  updateProductItem,
+);
+router.delete(
+  "/delete_item/:id",
+  verifyToken,
+  authorize("Admin"),
+  deleteProductItem,
+);
 
-  import {
-    getProductAttributes,
-    addProductAttribute,
-    updateProductAttribute,
-    deleteProductAttribute,
-  } from "../controllers/product_attribubtes.controller.js";
+//--------Products Attributes---------
 
-  router.get("/:productId/attributes/get_all_attributes", getProductAttributes);
-  router.post(
-    "/:productId/attributes/create_attibute",
-    verifyToken,
-    authorize("Admin"),
-    addProductAttribute,
-  );
-  router.put("/attributes/update_attribute/:attributeId", updateProductAttribute);
-  router.delete(
-    "/attributes/delete_attribute/:attributeId",
-    verifyToken,
-    authorize("Admin"),
-    deleteProductAttribute,
-  );
+import {
+  getProductAttributes,
+  addProductAttribute,
+  updateProductAttribute,
+  deleteProductAttribute,
+} from "../controllers/product_attribubtes.controller.js";
 
-  export default router;
+router.get("/:productId/attributes/get_all_attributes", getProductAttributes);
+router.post(
+  "/:productId/attributes/create_attibute",
+  verifyToken,
+  authorize("Admin"),
+  addProductAttribute,
+);
+router.put("/attributes/update_attribute/:attributeId", updateProductAttribute);
+router.delete(
+  "/attributes/delete_attribute/:attributeId",
+  verifyToken,
+  authorize("Admin"),
+  deleteProductAttribute,
+);
+
+export default router;

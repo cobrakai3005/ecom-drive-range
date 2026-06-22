@@ -90,34 +90,47 @@ export const getAllCategories = async (req, res) => {
     // Query parameters
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
-    const status = req.query.status; // 'active', 'inactive', or undefined (all)
+    const is_front = req.query.is_front;
+    const status = req.query.status;
     const offset = (page - 1) * limit;
 
-    // Base query parts
-    let whereClause = "";
-    let params = [];
+    // Build WHERE clause
+    const whereConditions = [];
+    const params = [];
 
-    whereClause = "WHERE status = ?";
+    // Status filter
     if (status && ["active", "inactive"].includes(status)) {
+      whereConditions.push("status = ?");
       params.push(status);
     } else {
+      whereConditions.push("status = ?");
       params.push("active");
     }
 
-    // Get total count for pagination metadata
-    const countQuery = `SELECT COUNT(*) as total FROM categories ${whereClause}`;
-    const [countResult] = await pool.query(countQuery, params);
+    // is_front filter - only add if explicitly provided
+    if (is_front !== undefined && is_front !== null) {
+      const isFrontValue = (is_front === 'true' || is_front === '1' || is_front === 1) ? 1 : 0;
+      whereConditions.push("is_front = ?");
+      params.push(isFrontValue);
+    }
+
+    const whereClause = `WHERE ${whereConditions.join(" AND ")}`;
+
+    // Get total count
+    const [countResult] = await pool.query(
+      `SELECT COUNT(*) as total FROM categories ${whereClause}`,
+      params
+    );
     const total = countResult[0].total;
 
     // Get paginated data
-    const dataQuery = `
-            SELECT * FROM categories 
-            ${whereClause}
-            ORDER BY id ASC  
-            LIMIT ? OFFSET ?
-        `;
-    const dataParams = [...params, limit, offset];
-    const [rows] = await pool.query(dataQuery, dataParams);
+    const [rows] = await pool.query(
+      `SELECT * FROM categories 
+       ${whereClause}
+       ORDER BY is_front DESC, id ASC  
+       LIMIT ? OFFSET ?`,
+      [...params, limit, offset]
+    );
 
     res.json({
       success: true,
