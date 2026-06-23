@@ -218,7 +218,6 @@ export const getProductItemById = async (req, res) => {
 export const createProductItem = async (req, res) => {
   const {
     product_id,
-
     variation_value,
     sku,
     price,
@@ -227,9 +226,11 @@ export const createProductItem = async (req, res) => {
     height,
     depth,
     is_available,
+    available_stock,
   } = req.body;
+console.log(available_stock);
 
-  if (!product_id || !variation_value || !sku || price === undefined) {
+  if (!product_id || !variation_value || !sku || price === undefined || !available_stock) {
     return res
       .status(400)
       .json({ success: false, message: "Missing required fields" });
@@ -253,8 +254,8 @@ export const createProductItem = async (req, res) => {
 
     const [result] = await pool.query(
       `INSERT INTO product_items 
-             (product_id, variation_value, sku, price, weight, width, height, depth, is_available)
-             VALUES (?,  ?, ?, ?, ?, ?, ?, ?, ?)`,
+             (product_id, variation_value, sku, price, weight, width, height, depth, is_available, available_stock)
+             VALUES (?,  ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         product_id,
         variation_value,
@@ -265,9 +266,9 @@ export const createProductItem = async (req, res) => {
         height || null,
         depth || null,
         is_available ?? true,
+        available_stock || 0
       ],
     );
-
     const [newItem] = await pool.query(
       "SELECT * FROM product_items WHERE id = ?",
       [result.insertId],
@@ -293,6 +294,7 @@ export const updateProductItem = async (req, res) => {
     height,
     depth,
     is_available,
+    available_stock,
   } = req.body;
 
   try {
@@ -339,7 +341,8 @@ export const updateProductItem = async (req, res) => {
                 width = COALESCE(?, width),
                 height = COALESCE(?, height),
                 depth = COALESCE(?, depth),
-                is_available = COALESCE(?, is_available)
+                is_available = COALESCE(?, is_available),
+               available_stock =?
              WHERE id = ?`,
       [
         product_id,
@@ -351,6 +354,7 @@ export const updateProductItem = async (req, res) => {
         height,
         depth,
         is_available,
+        available_stock,
         id,
       ],
     );

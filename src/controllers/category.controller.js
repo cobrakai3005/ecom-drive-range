@@ -2,89 +2,6 @@
 import cloudinary from "../config/cloudinary.js";
 import { pool } from "../config/db.js";
 
-// Get all categories with pagination and status filter
-// export const getAllCategories = async (req, res) => {
-//   try {
-//     // Query parameters
-//     const page = parseInt(req.query.page) || 1;
-//     const limit = parseInt(req.query.limit) || 10;
-//     const status = req.query.status; // 'active', 'inactive', or undefined (all)
-//     const offset = (page - 1) * limit;
-
-//     // Base query parts
-//     let whereClause = "";
-//     let params = [];
-
-//     whereClause = "WHERE status = ?";
-//     if (status && ["active", "inactive"].includes(status)) {
-//       params.push(status);
-//     } else {
-//       params.push("active");
-//     }
-
-//     // Get total count for pagination metadata
-//     const countQuery = `SELECT COUNT(*) as total FROM categories ${whereClause}`;
-//     const [countResult] = await pool.query(countQuery, params);
-//     const total = countResult[0].total;
-
-//     // Get paginated data
-//     const dataQuery = `
-//             SELECT * FROM categories
-//             ${whereClause}
-//             ORDER BY display_order ASC, id ASC
-//             LIMIT ? OFFSET ?
-//         `;
-//     const dataParams = [...params, limit, offset];
-//     const [rows] = await pool.query(dataQuery, dataParams);
-
-//     res.json({
-//       success: true,
-//       data: rows,
-//       pagination: {
-//         page,
-//         limit,
-//         total,
-//         totalPages: Math.ceil(total / limit),
-//       },
-//     });
-//   } catch (error) {
-//     console.error(error);
-//     res.status(500).json({ success: false, message: "Server error" });
-//   }
-// };
-
-// // Get single category by id – now accepts optional ?status= query param
-// export const getCategoryById = async (req, res) => {
-//   const { id } = req.params;
-//   const { status } = req.query; // 'active' or 'inactive' (optional)
-
-//   try {
-//     let query = "SELECT * FROM categories WHERE id = ?";
-//     const params = [id];
-
-//     query += " AND status = ?";
-//     if (status && ["active", "inactive"].includes(status)) {
-//       params.push(status);
-//     } else {
-//       params.push("active");
-//     }
-
-//     const [rows] = await pool.query(query, params);
-//     if (rows.length === 0) {
-//       return res.status(404).json({
-//         success: false,
-//         message: status
-//           ? `Category not found with id ${id} and status ${status}`
-//           : "Category not found",
-//       });
-//     }
-//     res.json({ success: true, data: rows[0] });
-//   } catch (error) {
-//     console.error(error);
-//     res.status(500).json({ success: false, message: "Server error" });
-//   }
-// };
-
 export const getAllCategories = async (req, res) => {
   try {
     // Query parameters
@@ -109,7 +26,8 @@ export const getAllCategories = async (req, res) => {
 
     // is_front filter - only add if explicitly provided
     if (is_front !== undefined && is_front !== null) {
-      const isFrontValue = (is_front === 'true' || is_front === '1' || is_front === 1) ? 1 : 0;
+      const isFrontValue =
+        is_front === "true" || is_front === "1" || is_front === 1 ? 1 : 0;
       whereConditions.push("is_front = ?");
       params.push(isFrontValue);
     }
@@ -119,7 +37,7 @@ export const getAllCategories = async (req, res) => {
     // Get total count
     const [countResult] = await pool.query(
       `SELECT COUNT(*) as total FROM categories ${whereClause}`,
-      params
+      params,
     );
     const total = countResult[0].total;
 
@@ -129,7 +47,7 @@ export const getAllCategories = async (req, res) => {
        ${whereClause}
        ORDER BY is_front DESC, id ASC  
        LIMIT ? OFFSET ?`,
-      [...params, limit, offset]
+      [...params, limit, offset],
     );
 
     res.json({
@@ -179,42 +97,6 @@ export const getCategoryById = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
-
-// Create a new category (unchanged)
-// export const createCategory = async (req, res) => {
-//   const { name, description, display_order, status, is_front } = req.body;
-
-//   // Get Cloudinary URL from uploaded file
-//   const image_url = req.file ? req.file.path : null; // 'path' contains the secure URL
-//   if (!name || name.trim() === "") {
-//     return res
-//       .status(400)
-//       .json({ success: false, message: "Name is required" });
-//   }
-
-//   try {
-//     const [result] = await pool.query(
-//       `INSERT INTO categories (name, description, image_url, display_order, status, is_front)
-//              VALUES (?, ?, ?, ?, ?, ?)`,
-//       [
-//         name,
-//         description || null,
-//         image_url || null,
-//         display_order || 0,
-//         status || "active",
-//         Boolean(is_front) || 0
-//       ],
-//     );
-//     const [newCategory] = await pool.query(
-//       "SELECT * FROM categories WHERE id = ?",
-//       [result.insertId],
-//     );
-//     res.status(201).json({ success: true, data: newCategory[0] });
-//   } catch (error) {
-//     console.error(error);
-//     res.status(500).json({ success: false, message: "Database error" });
-//   }
-// };
 
 export const createCategory = async (req, res) => {
   const { name, description, status, is_front } = req.body; // ✅ Removed display_order

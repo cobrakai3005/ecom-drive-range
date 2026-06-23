@@ -59,9 +59,12 @@ export const getAllProducts = async (req, res) => {
 
     // Category must be active
     whereConditions.push("c.status = 'active'");
+
     // Subcategory: if exists, must be active; if null, ignore
     whereConditions.push("(sc.id IS NULL OR sc.status = 'active')");
 
+    //Brand must be active
+    whereConditions.push("b.status = 'active'");
     // Optional filters
     if (category_id) {
       whereConditions.push("p.category_id = ?");

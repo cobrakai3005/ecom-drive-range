@@ -2,13 +2,41 @@ import { pool } from "../config/db.js";
 import { logAudit } from "../lib/auditLog.js";
 
 // ========== Get compatibility list for a product ==========
+// export const getCompatibilityByProduct = async (req, res) => {
+//   const { productId } = req.params;
+//   try {
+//     const [rows] = await pool.query(
+//       `SELECT pvc.*,
+//               g.generation_name, g.year_from, g.year_to,
+//               m.name as model_name, mk.name as make_name
+//        FROM product_vehicle_compatibility pvc
+//        JOIN vehicle_generations g ON pvc.vehicle_generation_id = g.id
+//        JOIN vehicle_models m ON g.model_id = m.id
+//        JOIN vehicle_makes mk ON m.make_id = mk.id
+//        WHERE pvc.product_id = ?
+//        ORDER BY mk.name, m.name, g.year_from`,
+//       [productId],
+//     );
+//     res.json({ success: true, data: rows });
+//   } catch (error) {
+//     console.error(error);
+//     res.status(500).json({ success: false, message: "Server error" });
+//   }
+// };
+
 export const getCompatibilityByProduct = async (req, res) => {
   const { productId } = req.params;
   try {
     const [rows] = await pool.query(
       `SELECT pvc.*, 
-              g.generation_name, g.year_from, g.year_to,
-              m.name as model_name, mk.name as make_name
+              g.generation_name, 
+              g.year_from, 
+              g.year_to,
+              m.name as model_name,
+              m.model_image_url as model_image_url,
+              mk.name as make_name,
+              mk.logo_url as make_logo_url,
+              mk.country as make_country
        FROM product_vehicle_compatibility pvc
        JOIN vehicle_generations g ON pvc.vehicle_generation_id = g.id
        JOIN vehicle_models m ON g.model_id = m.id
