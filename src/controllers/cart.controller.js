@@ -139,7 +139,7 @@ export const getCart = async (req, res) => {
       JOIN products p ON pi.product_id = p.id
       WHERE pi.id IN (?)
       `,
-      [itemIds]
+      [itemIds],
     );
 
     // Create a map for quick lookup
