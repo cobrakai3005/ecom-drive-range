@@ -50,6 +50,51 @@ const getOrCreateCart = async (userId, sessionToken, connection = null) => {
 };
 
 // ========== GET cart contents ==========
+// export const getCart = async (req, res) => {
+//   try {
+//     const userId = req.user?.id || null;
+//     const sessionToken = req.headers["x-session-token"] || null;
+//     if (!userId && !sessionToken) {
+//       return res
+//         .status(400)
+//         .json({ success: false, message: "User or session token required" });
+//     }
+
+//     const cart = await getOrCreateCart(userId, sessionToken);
+//     const itemsArray = Array.isArray(cart.items)
+//       ? cart.items
+//       : JSON.parse(cart.items || "[]");
+
+//     // Enrich items with product details
+//     const enrichedItems = [];
+//     for (const item of itemsArray) {
+//       const [productRows] = await pool.query(
+//         `SELECT pi.sku, pi.price as current_price, pi.variation_value, pi.available_stock,
+//                 p.name as product_name
+//          FROM product_items pi
+//          JOIN products p ON pi.product_id = p.id
+//          WHERE pi.id = ?`,
+//         [item.product_item_id],
+//       );
+//       if (productRows.length) {
+//         enrichedItems.push({
+//           ...item,
+//           product_name: productRows[0].product_name,
+//           sku: productRows[0].sku,
+//           current_price: productRows[0].current_price,
+//           variation_value: productRows[0].variation_value,
+//           available_stock: productRows[0].available_stock,
+//         });
+//       }
+//     }
+
+//     res.json({ success: true, data: enrichedItems });
+//   } catch (error) {
+//     console.error(error);
+//     res.status(500).json({ success: false, message: "Server error" });
+//   }
+// };
+
 export const getCart = async (req, res) => {
   try {
     const userId = req.user?.id || null;
@@ -65,28 +110,64 @@ export const getCart = async (req, res) => {
       ? cart.items
       : JSON.parse(cart.items || "[]");
 
-    // Enrich items with product details
-    const enrichedItems = [];
-    for (const item of itemsArray) {
-      const [productRows] = await pool.query(
-        `SELECT pi.sku, pi.price as current_price, pi.variation_value, pi.available_stock,
-                p.name as product_name
-         FROM product_items pi
-         JOIN products p ON pi.product_id = p.id
-         WHERE pi.id = ?`,
-        [item.product_item_id],
-      );
-      if (productRows.length) {
-        enrichedItems.push({
-          ...item,
-          product_name: productRows[0].product_name,
-          sku: productRows[0].sku,
-          current_price: productRows[0].current_price,
-          variation_value: productRows[0].variation_value,
-          available_stock: productRows[0].available_stock,
-        });
-      }
+    if (itemsArray.length === 0) {
+      return res.json({ success: true, data: [] });
     }
+
+    // Extract product_item IDs
+    const itemIds = itemsArray.map((item) => item.product_item_id);
+
+    // Single query to get product_item details + product name + primary image
+    const [productRows] = await pool.query(
+      `
+      SELECT 
+        pi.id AS product_item_id,
+        pi.sku,
+        pi.price AS current_price,
+        pi.variation_value,
+        pi.available_stock,
+        p.name AS product_name,
+        (
+          SELECT image_url 
+          FROM product_images 
+          WHERE product_id = p.id 
+            AND status = 'active' 
+          ORDER BY sort_order ASC, id ASC 
+          LIMIT 1
+        ) AS primary_image
+      FROM product_items pi
+      JOIN products p ON pi.product_id = p.id
+      WHERE pi.id IN (?)
+      `,
+      [itemIds]
+    );
+
+    // Create a map for quick lookup
+    const productMap = {};
+    productRows.forEach((row) => {
+      productMap[row.product_item_id] = {
+        product_name: row.product_name,
+        sku: row.sku,
+        current_price: row.current_price,
+        variation_value: row.variation_value,
+        available_stock: row.available_stock,
+        primary_image: row.primary_image || null, // fallback if no image
+      };
+    });
+
+    // Enrich cart items
+    const enrichedItems = itemsArray.map((item) => {
+      const details = productMap[item.product_item_id];
+      return {
+        ...item,
+        product_name: details?.product_name || null,
+        sku: details?.sku || null,
+        current_price: details?.current_price || null,
+        variation_value: details?.variation_value || null,
+        available_stock: details?.available_stock || null,
+        primary_image: details?.primary_image || null,
+      };
+    });
 
     res.json({ success: true, data: enrichedItems });
   } catch (error) {

@@ -42,22 +42,30 @@ import {
   deleteProductImage,
   reorderProductImages,
   toggleImageStatus,
+  addProductImages,
 } from "../controllers/product_images.controller.js";
 
 router.get("/:productId/images", getProductImages);
+// router.post(
+//   "/:productId/images",
+//   verifyToken,
+//   authorize("Admin", "Staff"),
+//   upload.single("product_images"),
+//   addProductImage,
+// );
 router.post(
   "/:productId/images",
   verifyToken,
   authorize("Admin", "Staff"),
-  upload.single("product_images"),
-  addProductImage,
+  upload.array("product_images"), // accepts multiple files with field name "product_images"
+  addProductImages, // renamed for clarity (optional)
 );
 router.delete(
   "/images/:imageId",
   verifyToken,
   authorize("Admin", "Staff"),
   deleteProductImage,
-);  
+);
 router.patch(
   "/:productId/images/reorder",
   verifyToken,

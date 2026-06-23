@@ -194,6 +194,48 @@ export const addProductImage = async (req, res) => {
   }
 };
 
+export const addProductImages = async (req, res) => {
+  const { productId } = req.params;
+
+  try {
+    // Check if any files were uploaded
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "At least one image file is required",
+      });
+    }
+
+    // Get common values from body (apply to all images)
+    const { sort_order = 0, status = "active" } = req.body;
+
+    // Prepare insert values for all images
+    const imagesData = req.files.map((file) => [
+      productId,
+      file.path, // or file.location if using cloud storage
+      sort_order,
+      status,
+    ]);
+
+    // Bulk insert
+    const [result] = await pool.query(
+      `INSERT INTO product_images (product_id, image_url, sort_order, status) VALUES ?`,
+      [imagesData],
+    );
+
+    // Fetch all newly inserted images
+    const [newImages] = await pool.query(
+      "SELECT * FROM product_images WHERE id >= ? AND product_id = ? ORDER BY id",
+      [result.insertId, productId], // insertId is the first auto-generated id
+    );
+
+    res.status(201).json({ success: true, data: newImages });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: "Upload error" });
+  }
+};
+
 // UPDATE a product image (status, sort_order)
 export const updateProductImage = async (req, res) => {
   const { imageId } = req.params;
