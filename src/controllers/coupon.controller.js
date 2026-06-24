@@ -69,8 +69,6 @@ export const createCouponTemplate = async (req, res) => {
   }
 };
 
-
-
 // ========== GET ALL COUPON TEMPLATES (admin) ==========
 export const getAllCouponTemplates = async (req, res) => {
   const page = parseInt(req.query.page) || 1;
@@ -175,7 +173,7 @@ export const getUserCoupons = async (req, res) => {
 export const applyCoupon = async (req, res) => {
   const userId = req.user.id;
   const { coupon_code, order_subtotal } = req.body;
-console.log(coupon_code, order_subtotal);
+  console.log(coupon_code);
 
   if (!coupon_code || order_subtotal === undefined) {
     return res.status(400).json({
@@ -255,6 +253,8 @@ console.log(coupon_code, order_subtotal);
       discountAmount = Math.min(coupon.discount_value, order_subtotal);
     }
 
+    console.log(discountAmount, typeof discountAmount);
+
     // Return success (no user_coupon_id anymore)
     res.json({
       success: true,
@@ -269,6 +269,114 @@ console.log(coupon_code, order_subtotal);
     res.status(500).json({
       success: false,
       message: "Server error while applying coupon",
+    });
+  }
+};
+
+// ========== UPDATE COUPON ACTIVE STATUS (admin) ==========
+
+export const updateCouponStatus = async (req, res) => {
+  const { id } = req.params;
+  const { is_active } = req.body; // expected: 0 or 1 (boolean)
+
+  if (is_active === undefined) {
+    return res.status(400).json({
+      success: false,
+      message: "is_active field is required (0 or 1)",
+    });
+  }
+
+  try {
+    // Check if coupon exists
+    const [rows] = await pool.query("SELECT * FROM coupons WHERE id = ?", [id]);
+    if (rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Coupon not found",
+      });
+    }
+
+    const oldData = rows[0];
+    await pool.query("UPDATE coupons SET is_active = ? WHERE id = ?", [
+      is_active,
+      id,
+    ]);
+
+    // Log the status change
+    await logAudit({
+      userId: req.user.id,
+      action: "UPDATE_COUPON_STATUS",
+      tableName: "coupons",
+      recordId: id,
+      oldData: { is_active: oldData.is_active },
+      newData: { is_active },
+      req,
+    });
+
+    res.json({
+      success: true,
+      message: "Coupon status updated successfully",
+      data: { id, is_active },
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      message: "Server error while updating coupon status",
+    });
+  }
+};
+
+// ========== DELETE COUPON (admin) ==========
+export const deleteCoupon = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    // Check if coupon exists
+    const [rows] = await pool.query("SELECT * FROM coupons WHERE id = ?", [id]);
+    if (rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Coupon not found",
+      });
+    }
+
+    // Prevent deletion if the coupon has been used in any order
+    const [orderRows] = await pool.query(
+      "SELECT COUNT(*) as count FROM orders WHERE coupon_id = ?",
+      [id],
+    );
+    if (orderRows[0].count > 0) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Cannot delete coupon that has been used in orders. Consider deactivating it instead.",
+      });
+    }
+
+    const oldData = rows[0];
+    await pool.query("DELETE FROM coupons WHERE id = ?", [id]);
+
+    // Log the deletion
+    await logAudit({
+      userId: req.user.id,
+      action: "DELETE_COUPON",
+      tableName: "coupons",
+      recordId: id,
+      oldData,
+      newData: null,
+      req,
+    });
+
+    res.json({
+      success: true,
+      message: "Coupon deleted successfully",
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      message: "Server error while deleting coupon",
     });
   }
 };

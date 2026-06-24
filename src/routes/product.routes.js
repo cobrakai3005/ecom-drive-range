@@ -43,6 +43,7 @@ import {
   reorderProductImages,
   toggleImageStatus,
   addProductImages,
+  hardDeleteProductImage,
 } from "../controllers/product_images.controller.js";
 
 router.get("/:productId/images", getProductImages);
@@ -64,7 +65,7 @@ router.delete(
   "/images/:imageId",
   verifyToken,
   authorize("Admin", "Staff"),
-  deleteProductImage,
+  hardDeleteProductImage,
 );
 router.patch(
   "/:productId/images/reorder",

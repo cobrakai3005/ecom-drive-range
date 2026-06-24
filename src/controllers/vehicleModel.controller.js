@@ -1,41 +1,65 @@
+
 import { pool } from "../config/db.js";
 import { logAudit } from "../lib/auditLog.js";
 
-// ========== GET models (filter by make_id, pagination, search) ==========
+// ========== GET models (filter by make_id, search, status, pagination) ==========
 export const getAllModels = async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
+    // Pagination
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.max(1, parseInt(req.query.limit) || 10);
     const offset = (page - 1) * limit;
-    const search = req.query.search || "";
-    const make_id = req.query.make_id;
 
-    let whereClause = "1=1";
-    let params = [];
+    // Filters
+    const search = req.query.search?.trim() || "";
+    const make_id = req.query.make_id;
+    let status = req.query.status?.trim() || "active"; // default: active
+
+    // Validate status
+    if (status && !["active", "inactive"].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: "status must be 'active' or 'inactive'",
+      });
+    }
+
+    // Build WHERE conditions
+    const conditions = [];
+    const params = [];
+
+    // Always add status filter (no 'all' option)
+    conditions.push("m.status = ?");
+    params.push(status);
+
     if (make_id) {
-      whereClause += " AND m.make_id = ?";
+      conditions.push("m.make_id = ?");
       params.push(make_id);
     }
+
     if (search) {
-      whereClause += " AND m.name LIKE ?";
+      conditions.push("m.name LIKE ?");
       params.push(`%${search}%`);
     }
 
+    const whereClause = `WHERE ${conditions.join(" AND ")}`;
+
+    // Count
     const countQuery = `
       SELECT COUNT(*) as total 
       FROM vehicle_models m
       LEFT JOIN vehicle_makes mk ON m.make_id = mk.id
-      WHERE ${whereClause}
+      ${whereClause}
     `;
     const [countResult] = await pool.query(countQuery, params);
     const totalItems = countResult[0].total;
-    const totalPages = Math.ceil(totalItems / limit);
+    const totalPages = Math.ceil(totalItems / limit) || 1;
 
+    // Fetch data
     const dataQuery = `
       SELECT m.*, mk.name as make_name
       FROM vehicle_models m
       LEFT JOIN vehicle_makes mk ON m.make_id = mk.id
-      WHERE ${whereClause}
+      ${whereClause}
       ORDER BY mk.name ASC, m.name ASC
       LIMIT ? OFFSET ?
     `;
@@ -59,7 +83,6 @@ export const getAllModels = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
-
 // ========== GET single model by id ==========
 export const getModelById = async (req, res) => {
   const { id } = req.params;
@@ -85,13 +108,22 @@ export const getModelById = async (req, res) => {
 
 // ========== CREATE model ==========
 export const createModel = async (req, res) => {
-  const { make_id, name, description } = req.body;
+  const { make_id, name, description, status } = req.body;
   if (!make_id || !name) {
     return res.status(400).json({
       success: false,
       message: "make_id and name are required",
     });
   }
+
+  // Validate status if provided
+  if (status && !["active", "inactive"].includes(status)) {
+    return res.status(400).json({
+      success: false,
+      message: "status must be 'active' or 'inactive'",
+    });
+  }
+
   try {
     // Check if make exists
     const [make] = await pool.query(
@@ -107,9 +139,12 @@ export const createModel = async (req, res) => {
     // Get uploaded image URL (if any)
     const model_image_url = req.file ? req.file.path : null;
 
+    // Use provided status, default to 'active' if not given
+    const finalStatus = status || "active";
+
     const [result] = await pool.query(
-      "INSERT INTO vehicle_models (make_id, name, description, model_image_url) VALUES (?, ?, ?, ?)",
-      [make_id, name, description || null, model_image_url],
+      "INSERT INTO vehicle_models (make_id, name, description, model_image_url, status) VALUES (?, ?, ?, ?, ?)",
+      [make_id, name, description || null, model_image_url, finalStatus],
     );
     const [newModel] = await pool.query(
       "SELECT * FROM vehicle_models WHERE id = ?",
@@ -140,7 +175,16 @@ export const createModel = async (req, res) => {
 // ========== UPDATE model ==========
 export const updateModel = async (req, res) => {
   const { id } = req.params;
-  const { make_id, name, description } = req.body;
+  const { make_id, name, description, status } = req.body;
+
+  // Validate status if provided
+  if (status && !["active", "inactive"].includes(status)) {
+    return res.status(400).json({
+      success: false,
+      message: "status must be 'active' or 'inactive'",
+    });
+  }
+
   try {
     const [existing] = await pool.query(
       "SELECT * FROM vehicle_models WHERE id = ?",
@@ -151,6 +195,8 @@ export const updateModel = async (req, res) => {
         .status(404)
         .json({ success: false, message: "Vehicle model not found" });
     }
+
+    // Validate make_id if provided
     if (make_id) {
       const [make] = await pool.query(
         "SELECT id FROM vehicle_makes WHERE id = ?",
@@ -163,17 +209,52 @@ export const updateModel = async (req, res) => {
       }
     }
 
-    // Handle new image upload
+    // Handle image upload (if any)
     let model_image_url = existing[0].model_image_url; // keep old by default
     if (req.file) {
       model_image_url = req.file.path;
       // Optional: delete old image from Cloudinary if needed
     }
 
+    // Build update fields dynamically (only provided fields)
+    const fields = [];
+    const values = [];
+
+    if (make_id) {
+      fields.push("make_id = ?");
+      values.push(make_id);
+    }
+    if (name) {
+      fields.push("name = ?");
+      values.push(name);
+    }
+    if (description !== undefined) {
+      fields.push("description = ?");
+      values.push(description);
+    }
+    if (status) {
+      fields.push("status = ?");
+      values.push(status);
+    }
+    if (req.file) {
+      fields.push("model_image_url = ?");
+      values.push(model_image_url);
+    }
+
+    // If nothing to update
+    if (fields.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No fields to update",
+      });
+    }
+
+    values.push(id);
     await pool.query(
-      "UPDATE vehicle_models SET make_id = COALESCE(?, make_id), name = COALESCE(?, name), description = COALESCE(?, description), model_image_url = ? WHERE id = ?",
-      [make_id, name, description, model_image_url, id],
+      `UPDATE vehicle_models SET ${fields.join(", ")} WHERE id = ?`,
+      values,
     );
+
     const [updated] = await pool.query(
       "SELECT * FROM vehicle_models WHERE id = ?",
       [id],

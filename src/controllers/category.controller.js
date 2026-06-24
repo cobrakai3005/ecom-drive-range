@@ -4,49 +4,52 @@ import { pool } from "../config/db.js";
 
 export const getAllCategories = async (req, res) => {
   try {
-    // Query parameters
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const is_front = req.query.is_front;
-    const status = req.query.status;
+    // Parse and sanitize pagination
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 10));
     const offset = (page - 1) * limit;
 
-    // Build WHERE clause
+    const { status, is_front, search } = req.query;
+
     const whereConditions = [];
     const params = [];
 
-    // Status filter
+    // Status filter (only if provided)
     if (status && ["active", "inactive"].includes(status)) {
       whereConditions.push("status = ?");
       params.push(status);
-    } else {
-      whereConditions.push("status = ?");
-      params.push("active");
     }
 
-    // is_front filter - only add if explicitly provided
+    // is_front filter (only if provided)
     if (is_front !== undefined && is_front !== null) {
-      const isFrontValue =
-        is_front === "true" || is_front === "1" || is_front === 1 ? 1 : 0;
+      const isFrontValue = ["true", "1", 1].includes(is_front) ? 1 : 0;
       whereConditions.push("is_front = ?");
       params.push(isFrontValue);
     }
 
-    const whereClause = `WHERE ${whereConditions.join(" AND ")}`;
+    // Search (multiple columns)
+    if (search) {
+      whereConditions.push("(c.name LIKE ? OR c.description LIKE ?)");
+      params.push(`%${search}%`, `%${search}%`);
+    }
 
-    // Get total count
-    const [countResult] = await pool.query(
-      `SELECT COUNT(*) as total FROM categories ${whereClause}`,
+    const whereClause = whereConditions.length
+      ? `WHERE ${whereConditions.join(" AND ")}`
+      : "";
+
+    // Count total
+    const [countRows] = await pool.query(
+      `SELECT COUNT(*) as total FROM categories c ${whereClause}`,
       params,
     );
-    const total = countResult[0].total;
+    const total = countRows[0].total;
 
-    // Get paginated data
+    // Fetch data
     const [rows] = await pool.query(
-      `SELECT * FROM categories 
-       ${whereClause}
-       ORDER BY is_front DESC, id ASC  
-       LIMIT ? OFFSET ?`,
+      `SELECT * FROM categories c
+   ${whereClause}
+   ORDER BY is_front DESC, id ASC  
+   LIMIT ? OFFSET ?`,
       [...params, limit, offset],
     );
 
@@ -61,8 +64,8 @@ export const getAllCategories = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, message: "Server error" });
+    console.error("Error in getAllCategories:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
 

@@ -6,6 +6,8 @@ import {
   getUserCouponsAdmin,
   getUserCoupons,
   applyCoupon,
+  updateCouponStatus,
+  deleteCoupon,
 } from "../controllers/coupon.controller.js";
 import verifyToken from "../middlewares/auth.middleware.js";
 import { authorize } from "../middlewares/authorize.middleware.js";
@@ -37,5 +39,22 @@ router.get(
 
 router.get("/my-coupons", verifyToken, getUserCoupons);
 router.post("/apply", verifyToken, applyCoupon);
+
+
+// New status update route
+router.put(
+  "/:id/status",
+  verifyToken,
+  authorize("Admin"),
+  updateCouponStatus
+);
+
+// New delete route
+router.delete(
+  "/:id",
+  verifyToken,
+  authorize("Admin"),
+  deleteCoupon
+);
 
 export default router;

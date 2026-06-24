@@ -4,30 +4,47 @@ import { logAudit } from "../lib/auditLog.js";
 // ========== GET all vehicle makes (public + pagination + search) ==========
 export const getAllMakes = async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
+    // Pagination
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.max(1, parseInt(req.query.limit) || 10);
     const offset = (page - 1) * limit;
-    const search = req.query.search || "";
 
-    let whereClause = "";
-    let params = [];
+    // Filters
+    const search = req.query.search?.trim() || "";
+    let status = req.query.status?.trim() || "active"; // default to active
+
+    // Build WHERE conditions dynamically
+    const conditions = [];
+    const params = [];
+
+    // Always add status filter unless explicitly set to 'all'
+    if (status !== "all") {
+      conditions.push("status = ?");
+      params.push(status);
+    }
+
     if (search) {
-      whereClause = "WHERE name LIKE ?";
+      conditions.push("name LIKE ?");
       params.push(`%${search}%`);
     }
 
+    // If no conditions, we want all rows (but we usually have at least status)
+    const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+
+    // Count total matching items
     const [countResult] = await pool.query(
       `SELECT COUNT(*) as total FROM vehicle_makes ${whereClause}`,
-      params,
+      params
     );
     const totalItems = countResult[0].total;
-    const totalPages = Math.ceil(totalItems / limit);
+    const totalPages = Math.ceil(totalItems / limit) || 1;
 
+    // Fetch paginated results
     const [rows] = await pool.query(
       `SELECT * FROM vehicle_makes ${whereClause}
        ORDER BY name ASC
        LIMIT ? OFFSET ?`,
-      [...params, limit, offset],
+      [...params, limit, offset]
     );
 
     res.json({
@@ -114,7 +131,7 @@ export const createMake = async (req, res) => {
 // ========== UPDATE vehicle make ==========
 export const updateMake = async (req, res) => {
   const { id } = req.params;
-  const { name, logo_url, country } = req.body;
+  const { name, logo_url, country, status } = req.body;
   try {
     const [existing] = await pool.query(
       "SELECT * FROM vehicle_makes WHERE id = ?",
@@ -127,8 +144,9 @@ export const updateMake = async (req, res) => {
     }
 
     await pool.query(
-      "UPDATE vehicle_makes SET name = COALESCE(?, name), logo_url = COALESCE(?, logo_url), country = COALESCE(?, country) WHERE id = ?",
-      [name, logo_url, country, id],
+      `UPDATE vehicle_makes
+       SET name = COALESCE(?, name), logo_url = COALESCE(?, logo_url), country = COALESCE(?, country), status = COALESCE(?, status) WHERE id = ?`,
+      [name, logo_url, country,status, id],
     );
     const [updated] = await pool.query(
       "SELECT * FROM vehicle_makes WHERE id = ?",

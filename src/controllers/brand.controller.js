@@ -10,6 +10,7 @@ export const getAllBrands = async (req, res) => {
     const search = req.query.search || "";
     const status = req.query.status; // 'active', 'inactive', or undefined
     const offset = (page - 1) * limit;
+  
 
     // Build WHERE clause dynamically
     let whereConditions = [];
@@ -24,6 +25,7 @@ export const getAllBrands = async (req, res) => {
       whereConditions.push("status = ?");
       params.push(status);
     }
+ 
 
     const whereClause =
       whereConditions.length > 0
@@ -151,8 +153,6 @@ export const updateBrand = async (req, res) => {
       logo_url = req.file.path;
     }
 
-    
-
     await pool.query(
       `UPDATE brands 
        SET name = COALESCE(?, name),
@@ -161,13 +161,7 @@ export const updateBrand = async (req, res) => {
            status = COALESCE(?, status)
          
        WHERE id = ?`,
-      [
-        name || null,
-        logo_url,
-        website || null,
-        status || null,
-        id,
-      ],
+      [name || null, logo_url, website || null, status || null, id],
     );
 
     const [updated] = await pool.query("SELECT * FROM brands WHERE id = ?", [
@@ -275,4 +269,3 @@ export const getActiveBrands = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
-

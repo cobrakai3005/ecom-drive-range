@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS vehicle_makes (
     country VARCHAR(100) NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    status ENUM('active', 'inactive') DEFAULT 'active' NOT NULL,
     INDEX idx_name (name)
 );
 
@@ -116,6 +117,7 @@ CREATE TABLE IF NOT EXISTS vehicle_models (
     name VARCHAR(100) NOT NULL,                 -- e.g., 'Camry'
     description TEXT NULL,
     model_image_url VARCHAR(255) NULL,
+    status ENUM('active', 'inactive') DEFAULT 'active' NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (make_id) REFERENCES vehicle_makes(id) ON DELETE CASCADE ON UPDATE CASCADE,
