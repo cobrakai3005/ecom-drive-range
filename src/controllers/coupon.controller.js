@@ -258,7 +258,7 @@ export const applyCoupon = async (req, res) => {
     // Return success (no user_coupon_id anymore)
     res.json({
       success: true,
-      discount_amount: parseFloat(discountAmount.toFixed(2)),
+      discount_amount: parseFloat(discountAmount).toFixed(2),
       coupon_id: coupon.id, // changed from user_coupon_id
       coupon_code: coupon.code,
       discount_type: coupon.discount_type,
