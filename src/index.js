@@ -2,20 +2,21 @@ import express from "express";
 import { config } from "dotenv";
 import cors from "cors";
 import { connect } from "./config/db.js";
-import cookie from 'cookie-parser'
+import cookie from "cookie-parser";
 config();
 
 const app = express();
 const port = process.env.PORT;
 
 app.use(express.json());
-app.use(cookie())
+app.use(cookie());
 app.use(express.urlencoded({ extended: true }));
 app.use(
   cors({
     origin: [
       process.env.FRONTEND_URL,
       "http://localhost:5173",
+      "http://localhost:5174",
       "https://full4-4.vercel.app",
     ],
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
@@ -39,6 +40,7 @@ import orderRoutes from "./routes/order.route.js";
 import vehicleMakeRoutes from "./routes/vehicleMake.routes.js";
 import vehicleModelRoutes from "./routes/vehicleModel.routes.js";
 import vehicleGenerationRoutes from "./routes/vehicleGeneration.routes.js";
+import shipmentsRoutes from "./routes/shipments.route.js";
 
 import paymentMothodsRoutes from "./routes/payment_method.route.js";
 import transactionsRoutes from "./routes/transactions.route.js";
@@ -76,6 +78,7 @@ app.use("/api/vehicle-makes", vehicleMakeRoutes);
 app.use("/api/vehicle-models", vehicleModelRoutes);
 app.use("/api/vehicle-generations", vehicleGenerationRoutes);
 app.use("/api/vehicle-compatibility", vehicleCompatibilty);
+app.use("/api/shipments", shipmentsRoutes);
 
 app.listen(port, async () => {
   await connect();
