@@ -376,18 +376,9 @@ export const initiateRazorpayCheckout = async (req, res) => {
 
     // Nothing is written to DB, so commit before Razorpay call
     await connection.commit();
-    const amount = Math.round(Number(total_amount) * 100);
 
-    console.log({
-      subtotal,
-      shipping_cost,
-      tax_amount,
-      discount_amount,
-      total_amount,
-      amount,
-    });
     const razorpayOrder = await razorpayInstance.orders.create({
-      amount: Math.round(100 * 100),
+      amount: Math.round(total_amount * 100),
       currency: "INR",
       receipt: `receipt_${Date.now()}`,
       notes: {
@@ -418,7 +409,7 @@ export const initiateRazorpayCheckout = async (req, res) => {
 
     return res.status(err.status || 500).json({
       success: false,
-      message: err.response?.data?.message || "Something went wrong",
+      message: err.responsemessage || "Something went wrong",
     });
   } finally {
     connection.release();
