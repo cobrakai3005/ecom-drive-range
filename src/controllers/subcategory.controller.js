@@ -57,7 +57,7 @@ export const getAllSubcategories = async (req, res) => {
             FROM subcategory s
             JOIN categories c on c.id = s.category_id
             ${whereClause}
-            ORDER BY s.id ASC 
+              ORDER BY is_front DESC, created_at DESC, id DESC  
             LIMIT ? OFFSET ?
         `;
     const dataParams = [...params, limit, offset];

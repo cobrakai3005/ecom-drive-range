@@ -30,7 +30,7 @@ export const createCouponTemplate = async (req, res) => {
   try {
     const validFrom = new Date(valid_from);
     const validTo = new Date(valid_to);
-    
+
     const [result] = await pool.query(
       `INSERT INTO coupons 
              (code, discount_type, discount_value, min_order_amount, max_discount_amount, 
@@ -83,7 +83,6 @@ export const updateCouponTemplate = async (req, res) => {
     valid_to,
     description,
     code,
-    
   } = req.body;
 
   if (!discount_type || !discount_value || !valid_from || !valid_to) {
@@ -188,25 +187,63 @@ export const updateCouponTemplate = async (req, res) => {
 
 // ========== GET ALL COUPON TEMPLATES (admin) ==========
 export const getAllCouponTemplates = async (req, res) => {
-  const page = parseInt(req.query.page) || 1;
-  const limit = parseInt(req.query.limit) || 10;
-  const offset = (page - 1) * limit;
   try {
-    const [rows] = await pool.query(
-      `SELECT * FROM coupons ORDER BY created_at DESC LIMIT ? OFFSET ?`,
-      [limit, offset],
-    );
+    // Pagination
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 10));
+    const offset = (page - 1) * limit;
+
+    // Filters
+    const { search, status } = req.query;
+
+    let whereClause = "WHERE 1=1";
+    const params = [];
+
+    // Status filter
+if (status) {
+  if (status === "active") {
+    whereClause += " AND is_active = ?";
+    params.push(1);
+  } else if (status === "inactive") {
+    whereClause += " AND is_active = ?";
+    params.push(0);
+  }
+}
+
+    // Search filter
+    if (search && search.trim()) {
+      whereClause += " AND code LIKE ?";
+      params.push(`%${search.trim()}%`);
+    }
+
+    // Count query
     const [countResult] = await pool.query(
-      "SELECT COUNT(*) as total FROM coupons",
+      `SELECT COUNT(*) AS total
+       FROM coupons
+       ${whereClause}`,
+      params,
     );
-    res.json({
+
+    const total = countResult[0].total;
+
+    // Data query
+    const [rows] = await pool.query(
+      `SELECT *
+       FROM coupons
+       ${whereClause}
+       ORDER BY created_at DESC
+       LIMIT ? OFFSET ?`,
+      [...params, limit, offset],
+    );
+
+    return res.status(200).json({
       success: true,
       data: rows,
       pagination: {
+        total,
         page,
         limit,
-        totalItems: countResult[0].total,
-        totalPages: Math.ceil(countResult[0].total / limit),
+        totalPages: Math.ceil(total / limit),
       },
     });
   } catch (error) {
@@ -394,18 +431,14 @@ export const applyCoupon = async (req, res) => {
 
 export const updateCouponStatus = async (req, res) => {
   const { id } = req.params;
-  const { is_active } = req.body; // expected: 0 or 1 (boolean)
-
-  if (is_active === undefined) {
-    return res.status(400).json({
-      success: false,
-      message: "is_active field is required (0 or 1)",
-    });
-  }
 
   try {
     // Check if coupon exists
-    const [rows] = await pool.query("SELECT * FROM coupons WHERE id = ?", [id]);
+    const [rows] = await pool.query(
+      "SELECT is_active FROM coupons WHERE id = ?",
+      [id]
+    );
+
     if (rows.length === 0) {
       return res.status(404).json({
         success: false,
@@ -413,31 +446,38 @@ export const updateCouponStatus = async (req, res) => {
       });
     }
 
-    const oldData = rows[0];
-    await pool.query("UPDATE coupons SET is_active = ? WHERE id = ?", [
-      is_active,
-      id,
-    ]);
+    const oldStatus = rows[0].is_active;
+    const newStatus = oldStatus === 1 ? 0 : 1;
 
-    // Log the status change
+    // Update status
+    await pool.query(
+      "UPDATE coupons SET is_active = ? WHERE id = ?",
+      [newStatus, id]
+    );
+
+    // Audit log
     await logAudit({
       userId: req.user.id,
       action: "UPDATE_COUPON_STATUS",
       tableName: "coupons",
       recordId: id,
-      oldData: { is_active: oldData.is_active },
-      newData: { is_active },
+      oldData: { is_active: oldStatus },
+      newData: { is_active: newStatus },
       req,
     });
 
-    res.json({
+    return res.status(200).json({
       success: true,
-      message: "Coupon status updated successfully",
-      data: { id, is_active },
+      message: `Coupon ${newStatus ? "activated" : "deactivated"} successfully.`,
+      data: {
+        id,
+        is_active: newStatus,
+      },
     });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({
+    console.error("Error updating coupon status:", error);
+
+    return res.status(500).json({
       success: false,
       message: "Server error while updating coupon status",
     });

@@ -65,6 +65,8 @@ CREATE TABLE IF NOT EXISTS categories (
     image_url VARCHAR(255),
  
     is_front BOOLEAN DEFAULT 0 NOT NULL ,
+     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     status ENUM('active', 'inactive') DEFAULT 'active'
 );
 
@@ -80,6 +82,8 @@ CREATE TABLE IF NOT EXISTS subcategory (
     is_front TINYINT(1) DEFAULT 0 NOT NULL, 
 
     status ENUM('active', 'inactive') DEFAULT 'active',
+     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
@@ -91,7 +95,9 @@ CREATE TABLE IF NOT EXISTS brands (
     name VARCHAR(100) NOT NULL,
     logo_url VARCHAR(255),
     website VARCHAR(255),
-    status ENUM('active', 'inactive') DEFAULT 'active' NOT NULL
+    status ENUM('active', 'inactive') DEFAULT 'active' NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 
@@ -148,35 +154,6 @@ CREATE TABLE IF NOT EXISTS vehicle_generations (
 
 
 
--- ===========================================
--- 4. PRODUCTS table
--- ===========================================
-    CREATE TABLE IF NOT EXISTS products (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        category_id INT NOT NULL,
-        sub_category_id INT NOT NULL,
-        brand_id INT NOT NULL,
-        name VARCHAR(200) NOT NULL,
-        slug VARCHAR(200) NOT NULL,
-        short_description TEXT,
-        long_description TEXT,
-        seo_title VARCHAR(200),
-        seo_description TEXT,
-        seo_keywords VARCHAR(500),
-        status ENUM('active', 'inactive') DEFAULT 'active',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE RESTRICT ON UPDATE CASCADE,
-        FOREIGN KEY (sub_category_id) REFERENCES subcategory(id) ON DELETE RESTRICT ON UPDATE CASCADE,
-        FOREIGN KEY (brand_id) REFERENCES brands(id) ON DELETE RESTRICT ON UPDATE CASCADE,
-
-        -- Indexes
-        UNIQUE INDEX idx_products_slug (slug),
-        INDEX idx_products_category_id (category_id),
-        INDEX idx_products_sub_category_id (sub_category_id),
-        INDEX idx_products_status (status)
-    );
-
 
 
 -- =============================================
@@ -196,27 +173,7 @@ CREATE TABLE IF NOT EXISTS product_vehicle_compatibility (
     INDEX idx_vehicle_generation_id (vehicle_generation_id)
 );
 
--- ===========================================
--- 6. PRODUCTS ITEMS
--- ===========================================
-CREATE TABLE IF NOT EXISTS product_items (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    product_id INT NOT NULL,
-    variation_value VARCHAR(100) NOT NULL,         -- e.g., 'Red', '6000K', 'H7'
-    sku VARCHAR(100) NOT NULL UNIQUE,
-    price DECIMAL(10,2) NOT NULL DEFAULT 0.00,    -- current selling price
-    weight DECIMAL(8,2),                           -- in kg or lb (choose unit)
-    width DECIMAL(8,2),                            -- in cm or inches
-    height DECIMAL(8,2),
-    depth DECIMAL(8,2),
-    is_available BOOLEAN DEFAULT TRUE,
-    available_stock INT NOT NULL DEFAULT 0,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    
-    FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE ON UPDATE CASCADE,
-    INDEX idx_product_id (product_id)
-);
+
 
 -- ===========================================
 -- 7. Product Images table
@@ -234,24 +191,6 @@ CREATE TABLE IF NOT EXISTS product_images (
     INDEX idx_product_id (product_id),
     INDEX idx_sort_order (sort_order),
     INDEX idx_status (status)  -- ✅ Recommended for faster queries
-);
-
--- ===========================================
--- 8. PRODUCTS TECHNICAL ATTRIBUTES
--- ===========================================
-CREATE TABLE IF NOT EXISTS product_technical_attributes (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    product_id INT NOT NULL,
-    attribute_name VARCHAR(100) NOT NULL,
-    attribute_value VARCHAR(500) NOT NULL,
-    unit VARCHAR(50) NULL,                         -- e.g., 'mm', 'kg', 'lumens'
-    display_order INT DEFAULT 0,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    
-    FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE ON UPDATE CASCADE,
-    
-    INDEX idx_product_id (product_id),
-    INDEX idx_attribute_name (attribute_name)
 );
 
 -- ===========================================
@@ -811,7 +750,7 @@ CREATE TABLE IF NOT EXISTS product_reviews (
 -- =============================================
 -- 11 Website Revoiew table (supports any one)
 -- =============================================
-CREATE TABLE website_reviews (
+CREATE TABLE IF NOT EXISTS website_reviews (
     id INT AUTO_INCREMENT PRIMARY KEY,
     user_id INT NOT NULL,
 
@@ -836,6 +775,29 @@ CREATE TABLE website_reviews (
 
     
     INDEX idx_user (user_id),
+    INDEX idx_status (status)
+);
+
+-- =============================================
+-- 12 Website Revoiew table (supports any one)
+-- =============================================
+
+
+CREATE TABLE IF NOT EXISTS warranty_registrations (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    order_item_id INT NOT NULL,
+    registration_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    warranty_end_date DATE NOT NULL,          -- calculated from purchase date
+    warranty_number VARCHAR(100) UNIQUE NOT NULL,
+    status ENUM('active', 'expired', 'claimed') DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT ON UPDATE CASCADE,
+    FOREIGN KEY (order_item_id) REFERENCES order_items(id) ON DELETE RESTRICT ON UPDATE CASCADE,
+    INDEX idx_user_id (user_id),
+    INDEX idx_order_item_id (order_item_id),
+    INDEX idx_warranty_number (warranty_number),
     INDEX idx_status (status)
 );
 

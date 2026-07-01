@@ -1,4 +1,3 @@
-
 import { pool } from "../config/db.js";
 import { logAudit } from "../lib/auditLog.js";
 
@@ -60,7 +59,7 @@ export const getAllModels = async (req, res) => {
       FROM vehicle_models m
       LEFT JOIN vehicle_makes mk ON m.make_id = mk.id
       ${whereClause}
-      ORDER BY mk.name ASC, m.name ASC
+       ORDER BY  created_at DESC, mk.name ASC, m.name ASC
       LIMIT ? OFFSET ?
     `;
     const dataParams = [...params, limit, offset];

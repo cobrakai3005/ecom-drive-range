@@ -29,12 +29,14 @@ export const getAllMakes = async (req, res) => {
     }
 
     // If no conditions, we want all rows (but we usually have at least status)
-    const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+    const whereClause = conditions.length
+      ? `WHERE ${conditions.join(" AND ")}`
+      : "";
 
     // Count total matching items
     const [countResult] = await pool.query(
       `SELECT COUNT(*) as total FROM vehicle_makes ${whereClause}`,
-      params
+      params,
     );
     const totalItems = countResult[0].total;
     const totalPages = Math.ceil(totalItems / limit) || 1;
@@ -42,9 +44,11 @@ export const getAllMakes = async (req, res) => {
     // Fetch paginated results
     const [rows] = await pool.query(
       `SELECT * FROM vehicle_makes ${whereClause}
-       ORDER BY name ASC
+       
+      ORDER BY  created_at DESC, id DESC ,name ASC 
+
        LIMIT ? OFFSET ?`,
-      [...params, limit, offset]
+      [...params, limit, offset],
     );
 
     res.json({
@@ -146,7 +150,7 @@ export const updateMake = async (req, res) => {
     await pool.query(
       `UPDATE vehicle_makes
        SET name = COALESCE(?, name), logo_url = COALESCE(?, logo_url), country = COALESCE(?, country), status = COALESCE(?, status) WHERE id = ?`,
-      [name, logo_url, country,status, id],
+      [name, logo_url, country, status, id],
     );
     const [updated] = await pool.query(
       "SELECT * FROM vehicle_makes WHERE id = ?",

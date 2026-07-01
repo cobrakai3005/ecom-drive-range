@@ -48,7 +48,7 @@ export const getAllCategories = async (req, res) => {
     const [rows] = await pool.query(
       `SELECT * FROM categories c
    ${whereClause}
-   ORDER BY is_front DESC, id ASC  
+  ORDER BY is_front DESC, created_at DESC, id DESC  
    LIMIT ? OFFSET ?`,
       [...params, limit, offset],
     );
@@ -161,18 +161,22 @@ export const updateCategory = async (req, res) => {
     const { name, description, status, is_front } = req.body; // Removed display_order
     let image_url = existing[0]?.image_url; // keep old by default
 
-    // If new file uploaded, use its URL
-    if (req.file && image_url) {
-      // Optional: delete old image from Cloudinary to save space
-      const publicId = existing[0]?.image_url
-        .split("/")
-        .slice(-2)
-        .join("/")
-        .split(".")[0];
-      await cloudinary.uploader.destroy(publicId);
-    }
+    console.log("Existing image_url:", image_url);
 
-    image_url = req.file.path;
+    // If new file uploaded, use its URL
+    if (req.file) {
+      image_url = req.file.path;
+
+      if (existing[0]?.image_url) {
+        const publicId = existing[0].image_url
+          .split("/")
+          .slice(-2)
+          .join("/")
+          .split(".")[0];
+
+        await cloudinary.uploader.destroy(publicId);
+      }
+    }
 
     // ✅ Fixed: Explicitly convert is_front to 1 or 0
     const isFrontValue =

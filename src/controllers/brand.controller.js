@@ -10,7 +10,6 @@ export const getAllBrands = async (req, res) => {
     const search = req.query.search || "";
     const status = req.query.status; // 'active', 'inactive', or undefined
     const offset = (page - 1) * limit;
-  
 
     // Build WHERE clause dynamically
     let whereConditions = [];
@@ -25,7 +24,6 @@ export const getAllBrands = async (req, res) => {
       whereConditions.push("status = ?");
       params.push(status);
     }
- 
 
     const whereClause =
       whereConditions.length > 0
@@ -39,7 +37,7 @@ export const getAllBrands = async (req, res) => {
     const dataQuery = `
             SELECT * FROM brands 
             ${whereClause}
-            ORDER BY  name ASC  
+             ORDER BY  created_at DESC, id DESC  
             LIMIT ? OFFSET ?
         `;
     const dataParams = [...params, limit, offset];

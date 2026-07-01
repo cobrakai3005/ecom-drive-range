@@ -56,7 +56,7 @@ export const getAllProducts = async (req, res) => {
       status,
       is_featured,
       is_front,
-      sort = "id DESC",
+      sort = "product_created_at DESC",
     } = req.query;
 
     const offset = (page - 1) * limit;

@@ -100,7 +100,6 @@ export const validateCoupon = async (db, couponCode, subtotal, userId) => {
     [couponCode, couponCode],
   );
 
-  
   if (couponRows.length === 0) {
     const err = new Error("Invalid or expired coupon");
     err.status = 400;
@@ -406,10 +405,11 @@ export const initiateRazorpayCheckout = async (req, res) => {
     });
   } catch (err) {
     await connection.rollback();
+    console.log(err);
 
     return res.status(err.status || 500).json({
       success: false,
-      message: err.message || "Something went wrong",
+      message: err.response?.data?.message || "Something went wrong",
     });
   } finally {
     connection.release();
