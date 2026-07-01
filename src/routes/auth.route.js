@@ -19,11 +19,20 @@ router.post("/register", upload.single("profile_image"), register);
 router.post("/logout", verifyToken, logout);
 router.post("/verify-otp", verifyOTP);
 router.post("/resend", resendOtp);
-router.post("/forget-password", verifyToken, forgetPassword);
+router.post("/forget-password", forgetPassword);
 router.patch(
   "/update-profile-image",
   verifyToken,
-  upload.single("profile_image"),
+
+  (req, res, next) => {
+    upload.single("profile_image")(req, res, (err) => {
+      if (err) {
+        // Multer error (file size, type, etc.)
+        return res.status(400).json({ message: err.message });
+      }
+      next();
+    });
+  },
   updateProfileImage,
 );
 

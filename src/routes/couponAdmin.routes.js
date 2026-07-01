@@ -8,6 +8,7 @@ import {
   applyCoupon,
   updateCouponStatus,
   deleteCoupon,
+  updateCouponTemplate,
 } from "../controllers/coupon.controller.js";
 import verifyToken from "../middlewares/auth.middleware.js";
 import { authorize } from "../middlewares/authorize.middleware.js";
@@ -22,6 +23,12 @@ router.post(
   verifyToken,
   authorize("Admin"),
   createCouponTemplate,
+);
+router.put(
+  "/update-template/:id",
+  verifyToken,
+  authorize("Admin"),
+  updateCouponTemplate,
 );
 
 router.get(
@@ -40,21 +47,15 @@ router.get(
 router.get("/my-coupons", verifyToken, getUserCoupons);
 router.post("/apply", verifyToken, applyCoupon);
 
-
 // New status update route
-router.put(
-  "/:id/status",
-  verifyToken,
-  authorize("Admin"),
-  updateCouponStatus
-);
+router.put("/:id/status", verifyToken, authorize("Admin"), updateCouponStatus);
 
 // New delete route
 router.delete(
-  "/:id",
+  "/delete-coupon/:id",
   verifyToken,
   authorize("Admin"),
-  deleteCoupon
+  deleteCoupon,
 );
 
 export default router;

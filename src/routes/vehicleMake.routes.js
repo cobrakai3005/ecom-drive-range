@@ -20,14 +20,31 @@ router.post(
   "/create_make",
   verifyToken,
   authorize("Admin"),
-  upload.single("logo_url"),
+
+  (req, res, next) => {
+    upload.single("logo_url")(req, res, (err) => {
+      if (err) {
+        // Multer error (file size, type, etc.)
+        return res.status(400).json({ error: err.message });
+      }
+      next();
+    });
+  },
   createMake,
 );
 router.put(
   "/update_make/:id",
   verifyToken,
   authorize("Admin"),
-  upload.single("logo_url"),
+  (req, res, next) => {
+    upload.single("logo_url")(req, res, (err) => {
+      if (err) {
+        // Multer error (file size, type, etc.)
+        return res.status(400).json({ error: err.message });
+      }
+      next();
+    });
+  },
   updateMake,
 );
 router.delete("/delete_make/:id", verifyToken, authorize("Admin"), deleteMake);

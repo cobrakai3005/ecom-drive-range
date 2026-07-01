@@ -2,6 +2,7 @@ import express from "express";
 import {
   getCompatibilityByProduct,
   addCompatibility,
+  updateCompatibility,
   removeCompatibility,
   getProductsByVehicle,
 } from "../controllers/vehicleCompatibility.controller.js";
@@ -20,6 +21,12 @@ router.post(
   verifyToken,
   authorize("Admin"),
   addCompatibility,
+);
+router.put(
+  "/product/:productId",
+  verifyToken,
+  authorize("Admin"),
+  updateCompatibility,
 );
 router.delete("/:id", verifyToken, authorize("Admin"), removeCompatibility);
 

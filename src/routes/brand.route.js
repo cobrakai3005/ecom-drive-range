@@ -15,7 +15,15 @@ router.get("/get_all_brands", getAllBrands);
 router.get("/get_brand_by_id/:id", verifyToken, getBrandById);
 router.post(
   "/create_brand",
-  upload.single("logo_url"),
+  (req, res, next) => {
+    upload.single("logo_url")(req, res, (err) => {
+      if (err) {
+        // Multer error (file size, type, etc.)
+        return res.status(400).json({ message: err.message });
+      }
+      next();
+    });
+  },
   verifyToken,
   authorize("Admin"),
   createBrand,
@@ -23,7 +31,15 @@ router.post(
 router.put(
   "/update_brand/:id",
   verifyToken,
-  upload.single("logo_url"),
+  (req, res, next) => {
+    upload.single("logo_url")(req, res, (err) => {
+      if (err) {
+        // Multer error (file size, type, etc.)
+        return res.status(400).json({ message: err.message });
+      }
+      next();
+    });
+  },
   authorize("Admin"),
   updateBrand,
 );

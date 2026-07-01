@@ -50,55 +50,19 @@ const getOrCreateCart = async (userId, sessionToken, connection = null) => {
 };
 
 // ========== GET cart contents ==========
-// export const getCart = async (req, res) => {
-//   try {
-//     const userId = req.user?.id || null;
-//     const sessionToken = req.headers["x-session-token"] || null;
-//     if (!userId && !sessionToken) {
-//       return res
-//         .status(400)
-//         .json({ success: false, message: "User or session token required" });
-//     }
-
-//     const cart = await getOrCreateCart(userId, sessionToken);
-//     const itemsArray = Array.isArray(cart.items)
-//       ? cart.items
-//       : JSON.parse(cart.items || "[]");
-
-//     // Enrich items with product details
-//     const enrichedItems = [];
-//     for (const item of itemsArray) {
-//       const [productRows] = await pool.query(
-//         `SELECT pi.sku, pi.price as current_price, pi.variation_value, pi.available_stock,
-//                 p.name as product_name
-//          FROM product_items pi
-//          JOIN products p ON pi.product_id = p.id
-//          WHERE pi.id = ?`,
-//         [item.product_item_id],
-//       );
-//       if (productRows.length) {
-//         enrichedItems.push({
-//           ...item,
-//           product_name: productRows[0].product_name,
-//           sku: productRows[0].sku,
-//           current_price: productRows[0].current_price,
-//           variation_value: productRows[0].variation_value,
-//           available_stock: productRows[0].available_stock,
-//         });
-//       }
-//     }
-
-//     res.json({ success: true, data: enrichedItems });
-//   } catch (error) {
-//     console.error(error);
-//     res.status(500).json({ success: false, message: "Server error" });
-//   }
-// };
 
 export const getCart = async (req, res) => {
   try {
     const userId = req.user?.id || null;
     const sessionToken = req.headers["x-session-token"] || null;
+
+    // Pagination & search params
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const search = req.query.search
+      ? req.query.search.trim().toLowerCase()
+      : "";
+
     if (!userId && !sessionToken) {
       return res
         .status(400)
@@ -111,65 +75,98 @@ export const getCart = async (req, res) => {
       : JSON.parse(cart.items || "[]");
 
     if (itemsArray.length === 0) {
-      return res.json({ success: true, data: [] });
+      return res.json({
+        success: true,
+        data: [],
+        pagination: { total: 0, page, limit, totalPages: 0 },
+      });
     }
 
-    // Extract product_item IDs
-    const itemIds = itemsArray.map((item) => item.product_item_id);
+    // Extract product IDs
+    const productIds = itemsArray.map((item) => item.product_id);
 
-    // Single query to get product_item details + product name + primary image
+    // Fetch current product data + primary image
     const [productRows] = await pool.query(
       `
       SELECT 
-        pi.id AS product_item_id,
-        pi.sku,
-        pi.price AS current_price,
-        pi.variation_value,
-        pi.available_stock,
+        p.id AS product_id,
         p.name AS product_name,
+        p.sku,
+        p.price AS current_price,
+        p.available_stock,
         (
           SELECT image_url 
-          FROM product_images 
+          FROM product_media 
           WHERE product_id = p.id 
             AND status = 'active' 
           ORDER BY sort_order ASC, id ASC 
           LIMIT 1
         ) AS primary_image
-      FROM product_items pi
-      JOIN products p ON pi.product_id = p.id
-      WHERE pi.id IN (?)
+      FROM product p
+      WHERE p.id IN (?)
       `,
-      [itemIds],
+      [productIds],
     );
 
-    // Create a map for quick lookup
+    // Build map
     const productMap = {};
     productRows.forEach((row) => {
-      productMap[row.product_item_id] = {
+      productMap[row.product_id] = {
+        product_id: row.product_id,
         product_name: row.product_name,
         sku: row.sku,
         current_price: row.current_price,
-        variation_value: row.variation_value,
         available_stock: row.available_stock,
-        primary_image: row.primary_image || null, // fallback if no image
+        primary_image: row.primary_image || null,
       };
     });
 
-    // Enrich cart items
-    const enrichedItems = itemsArray.map((item) => {
-      const details = productMap[item.product_item_id];
+    // Enrich all items
+    let enrichedItems = itemsArray.map((item) => {
+      const details = productMap[item.product_id];
       return {
-        ...item,
-        product_name: details?.product_name || null,
+        product_id: details?.product_id || item.product_id,
+        quantity: item.quantity,
+        unit_price: item.unit_price,
+        added_at: item.added_at,
+        snapshot_name: item.name,
+        snapshot_image: item.image_url,
+        product_name: details?.product_name || item.name,
         sku: details?.sku || null,
-        current_price: details?.current_price || null,
-        variation_value: details?.variation_value || null,
+        current_price: details?.current_price || item.unit_price,
         available_stock: details?.available_stock || null,
-        primary_image: details?.primary_image || null,
+        primary_image: details?.primary_image || item.image_url,
       };
     });
 
-    res.json({ success: true, data: enrichedItems });
+    // --- Apply search filter ---
+    if (search) {
+      enrichedItems = enrichedItems.filter(
+        (item) =>
+          item.product_name?.toLowerCase().includes(search) ||
+          item.snapshot_name?.toLowerCase().includes(search),
+      );
+    }
+
+    // --- Pagination ---
+    const total = enrichedItems.length;
+    const totalPages = Math.ceil(total / limit);
+    const startIndex = (page - 1) * limit;
+    const endIndex = Math.min(startIndex + limit, total);
+    const paginatedItems = enrichedItems.slice(startIndex, endIndex);
+
+    res.json({
+      success: true,
+      data: paginatedItems,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages,
+        hasNext: page < totalPages,
+        hasPrev: page > 1,
+      },
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ success: false, message: "Server error" });
@@ -177,9 +174,10 @@ export const getCart = async (req, res) => {
 };
 
 // ========== ADD item to cart ==========
+
 export const addToCart = async (req, res) => {
-  const { product_item_id, quantity } = req.body;
-  if (!product_item_id || !quantity || quantity <= 0) {
+  const { product_id, quantity } = req.body;
+  if (!product_id || !quantity || quantity <= 0) {
     return res
       .status(400)
       .json({ success: false, message: "Invalid product item or quantity" });
@@ -216,7 +214,7 @@ export const addToCart = async (req, res) => {
     let cartId, itemsArray;
     if (cartRow && cartRow.length > 0) {
       cartId = cartRow[0].id;
-      itemsArray = safeParseJSON(cartRow[0].items); // No 'let' here
+      itemsArray = safeParseJSON(cartRow[0].items);
     } else {
       const [result] = await connection.query(
         "INSERT INTO cart (user_id, session_token, items) VALUES (?, ?, ?)",
@@ -226,23 +224,34 @@ export const addToCart = async (req, res) => {
       itemsArray = [];
     }
 
-    // Validate product item and stock
+    // ----- MODIFIED PRODUCT QUERY -----
+    // Fetch price, stock, name, and the primary image URL (first active image)
     const [itemRows] = await connection.query(
-      "SELECT price, available_stock FROM product_items WHERE id = ? FOR UPDATE",
-      [product_item_id],
+      `SELECT p.price, p.available_stock, p.name,
+              (SELECT image_url 
+               FROM product_media 
+               WHERE product_id = p.id AND status = 'active' 
+               ORDER BY sort_order ASC, id ASC LIMIT 1) AS image_url
+       FROM product p
+       WHERE p.id = ? FOR UPDATE`,
+      [product_id],
     );
+
     if (itemRows.length === 0) {
       await connection.rollback();
       return res
         .status(404)
         .json({ success: false, message: "Product item not found" });
     }
+
     const unitPrice = itemRows[0].price;
     const availableStock = itemRows[0].available_stock;
+    const productName = itemRows[0].name;
+    const productImage = itemRows[0].image_url || null; // null if no active image
 
     // Find existing item index
     const existingIndex = itemsArray.findIndex(
-      (item) => item.product_item_id === product_item_id,
+      (item) => item.product_id === product_id,
     );
     let newQuantity = quantity;
     if (existingIndex !== -1) {
@@ -258,13 +267,16 @@ export const addToCart = async (req, res) => {
     // Update or insert item
     if (existingIndex !== -1) {
       itemsArray[existingIndex].quantity = newQuantity;
-      // optional: update unit_price if price changed? Keep original snapshot.
+      // Keep existing snapshot of name/image (do not overwrite)
     } else {
+      // ----- ADD MORE DETAILS TO NEW ITEM -----
       itemsArray.push({
-        product_item_id,
+        product_id,
         quantity,
         unit_price: unitPrice,
         added_at: new Date().toISOString().slice(0, 19).replace("T", " "),
+        name: productName, // snapshot product name
+        image_url: productImage, // snapshot primary image URL
       });
     }
 
@@ -284,10 +296,9 @@ export const addToCart = async (req, res) => {
     connection.release();
   }
 };
-
 // ========== UPDATE cart item quantity ==========
 export const updateCartItem = async (req, res) => {
-  const { itemId } = req.params; // product_item_id
+  const { productId } = req.params; // product_id
   const { quantity } = req.body;
   if (!parseInt(quantity) || parseInt(quantity) <= 0) {
     return res
@@ -332,7 +343,7 @@ export const updateCartItem = async (req, res) => {
     const cartId = cartRow[0].id;
     let itemsArray = safeParseJSON(cartRow[0].items || "[]");
     const itemIndex = itemsArray.findIndex(
-      (item) => item.product_item_id == itemId,
+      (item) => item.product_id == productId,
     );
     if (itemIndex === -1) {
       await connection.rollback();
@@ -343,8 +354,8 @@ export const updateCartItem = async (req, res) => {
 
     // Check stock
     const [stockRow] = await connection.query(
-      "SELECT available_stock FROM product_items WHERE id = ? FOR UPDATE",
-      [itemId],
+      "SELECT available_stock FROM product WHERE id = ? FOR UPDATE",
+      [productId],
     );
     if (stockRow.length === 0) {
       await connection.rollback();
@@ -378,8 +389,7 @@ export const updateCartItem = async (req, res) => {
 
 // ========== REMOVE item from cart ==========
 export const removeCartItem = async (req, res) => {
-  const { itemId } = req.params; // product_item_id
-  console.log(itemId);
+  const { productId } = req.params; // product_id
 
   const connection = await pool.getConnection();
   try {
@@ -402,8 +412,6 @@ export const removeCartItem = async (req, res) => {
       );
     }
 
-    console.log(cartRow);
-
     if ((!cartRow || cartRow.length === 0) && sessionToken) {
       [cartRow] = await connection.query(
         "SELECT id, items FROM cart WHERE session_token = ? FOR UPDATE",
@@ -420,7 +428,7 @@ export const removeCartItem = async (req, res) => {
     const cartId = cartRow[0].id;
     let itemsArray = safeParseJSON(cartRow[0].items);
     const newItemsArray = itemsArray.filter(
-      (item) => item.product_item_id != itemId,
+      (item) => item.product_id != productId,
     );
     if (newItemsArray.length === itemsArray.length) {
       await connection.rollback();

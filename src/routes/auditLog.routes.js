@@ -4,6 +4,7 @@ import { authorize } from "../middlewares/authorize.middleware.js";
 import {
   getAuditLogs,
   getAuditLogByRecord,
+  getDistinctActions,
 } from "../controllers/auditLog.controller.js";
 
 const router = express.Router();
@@ -15,5 +16,6 @@ router.get(
   authorize("Admin"),
   getAuditLogByRecord,
 );
+router.get("/audit-logs/actions", getDistinctActions);
 
 export default router;

@@ -87,89 +87,6 @@ export const registerController = async (req, res) => {
   }
 };
 
-export const verifyOTP = async (req, res) => {
-  try {
-    console.log(req?.body);
-    const { phone, otp } = req?.body;
-
-    if (!phone || !otp) {
-      return res.status(400).json({
-        message: "All fields are required",
-        success: false,
-      });
-    }
-
-    if (phone.length !== 10) {
-      return res.status(400).json({
-        message: `Phone number must be 10 digits`,
-        success: false,
-      });
-    }
-
-    const [userRows] = await pool.query(`SELECT * FROM users WHERE phone = ?`, [
-      phone,
-    ]);
-
-    if (userRows.length <= 0) {
-      return res.status(400).json({
-        message: "User not found with this number",
-        success: false,
-      });
-    }
-
-    const existingUser = userRows[0];
-
-    console.log(existingUser);
-    console.log(otp);
-
-    // const existingUser = userRows[0];
-    if (existingUser.is_delete) {
-      return res.status(400).json({
-        success: false,
-        message: "You can't do this operation Because Admin Deactivate you",
-      });
-    }
-
-    if (existingUser.otp != otp) {
-      return res.status(400).json({
-        message: "Invalid OTP",
-        success: false,
-      });
-    }
-
-    console.log(existingUser);
-    console.log(Date(Date.now()));
-
-    // Compare expiry (MySQL datetime vs JS Date)
-    if (new Date(existingUser.otp_expire) < new Date()) {
-      return res.status(400).json({
-        message: "OTP has expired",
-        success: false,
-      });
-    }
-
-    await pool.query(
-      `UPDATE users 
-   SET otp_verify = true,
-       otp = NULL,
-       otp_expire = NULL
-   WHERE phone = ?`,
-      [phone],
-    );
-
-    res.status(200).json({
-      message: "OTP verified successfully",
-      success: true,
-    });
-  } catch (error) {
-    console.log(error);
-    return res.status(500).json({
-      success: false,
-      message: error.message,
-    });
-  }
-};
-
 export const login = async (req, res) => {
   try {
     const { email, password } = req?.body;
@@ -305,6 +222,89 @@ export const resendOtp = async (req, res) => {
       message: `OTP resent successfully to ${email}`,
       success: true,
       data: updatedRows[0],
+    });
+  } catch (error) {
+    console.log(error);
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+export const verifyOTP = async (req, res) => {
+  try {
+    console.log(req?.body);
+    const { phone, otp } = req?.body;
+
+    if (!phone || !otp) {
+      return res.status(400).json({
+        message: "All fields are required",
+        success: false,
+      });
+    }
+
+    if (phone.length !== 10) {
+      return res.status(400).json({
+        message: `Phone number must be 10 digits`,
+        success: false,
+      });
+    }
+
+    const [userRows] = await pool.query(`SELECT * FROM users WHERE phone = ?`, [
+      phone,
+    ]);
+
+    if (userRows.length <= 0) {
+      return res.status(400).json({
+        message: "User not found with this number",
+        success: false,
+      });
+    }
+
+    const existingUser = userRows[0];
+
+    console.log(existingUser);
+    console.log(otp);
+
+    // const existingUser = userRows[0];
+    if (existingUser.is_delete) {
+      return res.status(400).json({
+        success: false,
+        message: "You can't do this operation Because Admin Deactivate you",
+      });
+    }
+
+    if (existingUser.otp != otp) {
+      return res.status(400).json({
+        message: "Invalid OTP",
+        success: false,
+      });
+    }
+
+    console.log(existingUser);
+    console.log(Date(Date.now()));
+
+    // Compare expiry (MySQL datetime vs JS Date)
+    if (new Date(existingUser.otp_expire) < new Date()) {
+      return res.status(400).json({
+        message: "OTP has expired",
+        success: false,
+      });
+    }
+
+    await pool.query(
+      `UPDATE users 
+   SET otp_verify = true,
+       otp = NULL,
+       otp_expire = NULL
+   WHERE phone = ?`,
+      [phone],
+    );
+
+    res.status(200).json({
+      message: "OTP verified successfully",
+      success: true,
     });
   } catch (error) {
     console.log(error);

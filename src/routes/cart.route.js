@@ -14,10 +14,10 @@ import {
 
 const router = express.Router();
 
-router.get("/", getCart); // authenticate may be optional, but we'll pass userId if present
+router.get("/", authenticateAndHandleGuests, getCart); // authenticate may be optional, but we'll pass userId if present
 router.post("/add", authenticateAndHandleGuests, addToCart);
-router.put("/item/:itemId", authenticateAndHandleGuests, updateCartItem);
-router.delete("/item/:itemId", authenticateAndHandleGuests, removeCartItem);
+router.put("/item/:productId", authenticateAndHandleGuests, updateCartItem);
+router.delete("/item/:productId", authenticateAndHandleGuests, removeCartItem);
 router.delete("/clear", authenticateAndHandleGuests, clearCart);
 
 export default router;

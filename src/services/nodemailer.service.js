@@ -11,8 +11,8 @@ const transporter = nodemailer.createTransport({
   connectionTimeout: 10000, // 10 seconds
   greetingTimeout: 10000,
   socketTimeout: 10000,
-  debug: true, // logs SMTP conversation
-  logger: true, // logs to console
+  // debug: true, // logs SMTP conversation
+  // logger: true, // logs to console
 });
 
 // ------------------- Helper: Send Verification Email -------------------
@@ -63,7 +63,7 @@ export async function sendOrderConfirmationEmail(email, orderDetails) {
   // console.log("Email function called with to:", to);
   console.log("Order details:", JSON.stringify(orderDetails));
   // Safely format date
-  const orderDate = orderDetails.order_date
+  const orderDate = orderDetails?.order_date
     ? new Date(orderDetails.order_date).toLocaleString()
     : "Pending";
 

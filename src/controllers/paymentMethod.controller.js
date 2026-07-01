@@ -5,6 +5,7 @@ import { logAudit } from "../lib/auditLog.js";
 // Encryption key (32 bytes for AES-256) - store in environment variables
 const ENCRYPTION_KEY =
   process.env.ENCRYPTION_KEY || crypto.randomBytes(32).toString("hex");
+
 const IV_LENGTH = 16;
 
 const encrypt = (text) => {

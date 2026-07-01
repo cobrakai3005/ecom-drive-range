@@ -1,6 +1,7 @@
 import { pool } from "../config/db.js";
 import { logAudit } from "../lib/auditLog.js";
 import { sendOrderConfirmationEmail } from "../services/nodemailer.service.js";
+import razorpayInstance from "../config/razorpay.js";
 
 // Helper to safely parse JSON (reuse from cart controller or define here)
 const safeParseJSON = (jsonField) => {
@@ -21,7 +22,7 @@ const safeParseJSON = (jsonField) => {
 
 // ========== Helper: get cart items from JSON column ==========
 const getCartItems = async (cartId) => {
-  // Fetch cart row with items JSON
+  // 1. Fetch the cart's JSON items
   const [cartRows] = await pool.query("SELECT items FROM cart WHERE id = ?", [
     cartId,
   ]);
@@ -30,111 +31,455 @@ const getCartItems = async (cartId) => {
   const itemsArray = safeParseJSON(cartRows[0].items);
   if (itemsArray.length === 0) return [];
 
-  // Get product details for each item
-  const productItemIds = itemsArray.map((item) => item.product_item_id);
-  const placeholders = productItemIds.map(() => "?").join(",");
-  const [productItems] = await pool.query(
-    `SELECT pi.id as product_item_id, pi.sku, pi.price, p.name as product_name
-     FROM product_items pi
-     JOIN products p ON pi.product_id = p.id
-     WHERE pi.id IN (${placeholders})`,
-    productItemIds,
+  // 2. Extract product IDs from the cart items
+  const productIds = itemsArray.map((item) => item.product_id);
+  const placeholders = productIds.map(() => "?").join(",");
+
+  // 3. Query current product data + primary image (from product_media)
+  const [products] = await pool.query(
+    `
+    SELECT 
+      p.id AS product_id,
+      p.sku,
+      p.price,
+      p.name AS product_name,
+      (
+        SELECT image_url 
+        FROM product_media 
+        WHERE product_id = p.id 
+          AND status = 'active' 
+        ORDER BY sort_order ASC, id ASC 
+        LIMIT 1
+      ) AS primary_image
+    FROM product p
+    WHERE p.id IN (${placeholders})
+    `,
+    productIds,
   );
 
-  // Map product details back to cart items
+  // 4. Build a map for quick lookup
   const productMap = new Map();
-  productItems.forEach((pi) => productMap.set(pi.product_item_id, pi));
+  products.forEach((prod) => productMap.set(prod.product_id, prod));
 
+  // 5. Enrich each cart item with current product data (skip if product missing)
   const enrichedItems = [];
   for (const item of itemsArray) {
-    const prod = productMap.get(item.product_item_id);
+    const prod = productMap.get(item.product_id);
     if (prod) {
       enrichedItems.push({
-        product_item_id: item.product_item_id,
+        product_id: item.product_id,
         quantity: item.quantity,
-        unit_price: item.unit_price,
+        unit_price: item.unit_price, // snapshot price at add time
         sku: prod.sku,
-        price: prod.price,
+        price: prod.price, // current live price
         product_name: prod.product_name,
+        primary_image: prod.primary_image, // current primary image
       });
     }
+    // If product is not found, you could still include the item with null values
+    // but we follow the original behaviour: skip missing products.
   }
+
   return enrichedItems;
 };
 
-// ========== CREATE order from cart ==========
+export const validateCoupon = async (db, couponCode, subtotal, userId) => {
+  const now = new Date();
 
-export const createOrder = async (req, res) => {
-  const {
-    shipping_address_id,
-    billing_address_id,
-    customer_notes,
-    shipping_cost = 0,
-    tax_amount = 0,
-    currency_code = "IND",
-    coupon_code = null,
-    payment_method,
-  } = req.body;
+  // Fetch coupon
+  const [couponRows] = await db.query(
+    `
+  SELECT *,
+         NOW() AS mysql_now,
+         valid_from <= NOW() AS from_ok,
+         valid_to >= NOW() AS to_ok,
+         code = ? AS code_ok
+  FROM coupons
+  WHERE code = ?
+  `,
+    [couponCode, couponCode],
+  );
 
-  // Validation
-  if (!shipping_address_id || !billing_address_id) {
-    return res
-      .status(400)
-      .json({ success: false, message: "Addresses required" });
+  
+  if (couponRows.length === 0) {
+    const err = new Error("Invalid or expired coupon");
+    err.status = 400;
+    throw err;
   }
+  const coupon = couponRows[0];
 
-  const allowedPaymentMethods = ["card", "upi", "bank_transfer", "cash"];
-  if (!payment_method || !allowedPaymentMethods.includes(payment_method)) {
-    return res
-      .status(400)
-      .json({ success: false, message: "Invalid or missing payment method" });
-  }
-
-  const userId = req.user?.id;
-  if (!userId) {
-    return res.status(401).json({ success: false, message: "Login required" });
-  }
-
-  // Find cart (existing logic – unchanged)
-  const sessionToken = req.headers["x-session-token"] || null;
-  let cartId = null;
-  const [cartRows] = await pool.query("SELECT id FROM cart WHERE user_id = ?", [
-    userId,
-  ]);
-  if (cartRows.length) cartId = cartRows[0].id;
-  if (!cartId && sessionToken) {
-    const [guestCart] = await pool.query(
-      "SELECT id FROM cart WHERE session_token = ?",
-      [sessionToken],
+  // Minimum order amount check
+  if (subtotal < Number(coupon.min_order_amount)) {
+    const err = new Error(
+      `Minimum order amount is ₹${coupon.min_order_amount}`,
     );
-    if (guestCart.length) cartId = guestCart[0].id;
-  }
-  if (!cartId) {
-    return res.status(400).json({ success: false, message: "Cart not found" });
+    err.status = 400;
+    throw err;
   }
 
+  // Global usage limit
+  if (coupon.total_usage_limit !== null) {
+    const [[usage]] = await db.query(
+      `
+      SELECT COUNT(*) AS total
+      FROM coupons
+      WHERE id = ?
+      `,
+      [coupon.id],
+    );
+
+    if (usage.total >= coupon.total_usage_limit) {
+      const err = new Error("Coupon usage limit reached.");
+      err.status = 400;
+      throw err;
+    }
+  }
+
+  // Global usage
+  const [[usage]] = await db.query(
+    `
+  SELECT COUNT(*) AS total
+  FROM orders
+  WHERE coupon_id = ?
+  `,
+    [coupon.id],
+  );
+
+  // User usage
+  const [[userUsage]] = await db.query(
+    `
+  SELECT COUNT(*) AS total
+  FROM orders
+  WHERE coupon_id = ?
+    AND user_id = ?
+    AND payment_status = 'paid'
+  `,
+    [coupon.id, userId],
+  );
+
+  if (userUsage.total >= coupon.usage_limit_per_user) {
+    throw new Error("You have already used this coupon");
+  }
+  // Calculate discount
+  let discount_amount = 0;
+
+  if (coupon.discount_type === "percentage") {
+    discount_amount = (subtotal * Number(coupon.discount_value)) / 100;
+
+    if (
+      coupon.max_discount_amount !== null &&
+      discount_amount > Number(coupon.max_discount_amount)
+    ) {
+      discount_amount = Number(coupon.max_discount_amount);
+    }
+  } else {
+    discount_amount = Number(coupon.discount_value);
+  }
+
+  // Discount cannot exceed subtotal
+  discount_amount = Math.min(discount_amount, subtotal);
+
+  return {
+    appliedCouponId: coupon.id,
+    coupon_code: coupon.code,
+    discount_amount: Number(discount_amount.toFixed(2)),
+    coupon,
+  };
+};
+
+// ========== CREATING order from cart ==========
+
+// =============================================================
+// STEP 1 — Initiate: validate cart + coupon, create Razorpay order
+// =============================================================
+// export const initiateRazorpayCheckout = async (req, res) => {
+//   const userId = req.user?.id;
+//   console.log("Initialize payment");
+//   const connection = await pool.getConnection();
+//   if (!userId) {
+//     return res.status(401).json({ success: false, message: "Unauthorized" });
+//   }
+
+//   const {
+//     shipping_address_id,
+//     billing_address_id,
+//     coupon_code = null,
+//   } = req.body;
+
+//   if (!shipping_address_id || !billing_address_id) {
+//     return res.status(400).json({
+//       success: false,
+//       message: "Shipping and Billing addresses are required",
+//     });
+//   }
+
+//   // 1. Fetch cart
+//   const [cartRows] = await pool.query("SELECT id FROM cart WHERE user_id = ?", [
+//     userId,
+//   ]);
+//   if (cartRows.length === 0) {
+//     return res.status(400).json({ success: false, message: "Cart not found" });
+//   }
+
+//   const cartId = cartRows[0].id;
+//   const items = await getCartItems(cartId);
+
+//   if (items.length === 0) {
+//     return res.status(400).json({ success: false, message: "Cart is empty" });
+//   }
+
+//   // 2. Calculate subtotal
+//   let subtotal = 0;
+//   for (const item of items) subtotal += item.quantity * item.unit_price;
+
+//   // 3. Validate coupon (read-only — no transaction needed here)
+//   let discount_amount = 0;
+//   if (coupon_code) {
+//     try {
+//       // FOR UPDATE is fine on pool without a transaction; it locks for the
+//       // duration of the single query which is all we need here.
+//       ({ discount_amount } = await validateCoupon(
+//         pool,
+//         coupon_code,
+//         subtotal,
+//         userId,
+//       ));
+//     } catch (err) {
+//       return res
+//         .status(err.status || 400)
+//         .json({ success: false, message: err.message });
+//     }
+//   }
+
+//   // 4. Calculate total
+//   const shipping_cost = parseFloat(req.body.shipping_cost) || 0;
+//   const tax_amount = parseFloat(req.body.tax_amount) || 0;
+//   const total_amount = subtotal + shipping_cost + tax_amount - discount_amount;
+
+//   if (total_amount <= 0) {
+//     return res
+//       .status(400)
+//       .json({ success: false, message: "Invalid total amount" });
+//   }
+
+//   try {
+//     // 5. Create Razorpay order — store all checkout data in notes so the
+//     //    verify step can reconstruct it without relying on session state.
+//     const razorpayOrder = await razorpayInstance.orders.create({
+//       amount: Math.round(total_amount * 100), // paise
+//       currency: "INR",
+//       receipt: `receipt_${Date.now()}`,
+//       notes: {
+//         user_id: String(userId),
+//         cart_id: String(cartId),
+//         shipping_address_id: String(shipping_address_id),
+//         billing_address_id: String(billing_address_id),
+//         coupon_code: coupon_code || "",
+//         calculated_discount: String(discount_amount),
+//         shipping_cost: String(shipping_cost),
+//         tax_amount: String(tax_amount),
+//         subtotal: String(subtotal),
+//       },
+//     });
+
+//     return res.status(200).json({
+//       success: true,
+//       data: {
+//         razorpayOrderId: razorpayOrder.id,
+//         amount: razorpayOrder.amount,
+//         currency: razorpayOrder.currency,
+//         key: process.env.RAZORPAY_KEY_ID,
+//       },
+//     });
+//   } catch (error) {
+//     console.error("Razorpay Init Error:", error);
+//     return res
+//       .status(500)
+//       .json({ success: false, message: "Failed to initiate payment" });
+//   }
+// };
+
+export const initiateRazorpayCheckout = async (req, res) => {
+  const userId = req.user?.id;
+
+  if (!userId) {
+    return res.status(401).json({ success: false, message: "Unauthorized" });
+  }
+
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+    const {
+      shipping_address_id,
+      billing_address_id,
+      coupon_code = null,
+    } = req.body;
+
+    if (!shipping_address_id || !billing_address_id) {
+      await connection.rollback();
+      return res.status(400).json({
+        success: false,
+        message: "Shipping and Billing addresses are required",
+      });
+    }
+
+    // Fetch cart
+    const [cartRows] = await connection.query(
+      "SELECT id FROM cart WHERE user_id = ?",
+      [userId],
+    );
+
+    if (cartRows.length === 0) {
+      await connection.rollback();
+      return res
+        .status(400)
+        .json({ success: false, message: "Cart not found" });
+    }
+
+    const cartId = cartRows[0].id;
+    const items = await getCartItems(cartId);
+
+    if (items.length === 0) {
+      await connection.rollback();
+      return res.status(400).json({ success: false, message: "Cart is empty" });
+    }
+
+    let subtotal = 0;
+    for (const item of items) {
+      subtotal += item.quantity * item.unit_price;
+    }
+
+    let discount_amount = 0;
+
+    if (coupon_code) {
+      ({ discount_amount } = await validateCoupon(
+        connection,
+        coupon_code,
+        subtotal,
+        userId,
+      ));
+    }
+
+    const shipping_cost = parseFloat(req.body.shipping_cost) || 0;
+    const tax_amount = parseFloat(req.body.tax_amount) || 0;
+
+    const total_amount =
+      subtotal + shipping_cost + tax_amount - discount_amount;
+
+    if (total_amount <= 0) {
+      await connection.rollback();
+      return res.status(400).json({
+        success: false,
+        message: "Invalid total amount",
+      });
+    }
+
+    // Nothing is written to DB, so commit before Razorpay call
+    await connection.commit();
+
+    const razorpayOrder = await razorpayInstance.orders.create({
+      amount: Math.round(total_amount * 100),
+      currency: "INR",
+      receipt: `receipt_${Date.now()}`,
+      notes: {
+        user_id: String(userId),
+        cart_id: String(cartId),
+        shipping_address_id: String(shipping_address_id),
+        billing_address_id: String(billing_address_id),
+        coupon_code: coupon_code || "",
+        calculated_discount: String(discount_amount),
+        shipping_cost: String(shipping_cost),
+        tax_amount: String(tax_amount),
+        subtotal: String(subtotal),
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        razorpayOrderId: razorpayOrder.id,
+        amount: razorpayOrder.amount,
+        currency: razorpayOrder.currency,
+        key: process.env.RAZORPAY_KEY_ID,
+      },
+    });
+  } catch (err) {
+    await connection.rollback();
+
+    return res.status(err.status || 500).json({
+      success: false,
+      message: err.message || "Something went wrong",
+    });
+  } finally {
+    connection.release();
+  }
+};
+// =============================================================
+// STEP 2 — Verify: confirm payment, deduct stock, create order
+// =============================================================
+import crypto from "crypto";
+export const verifyRazorpayAndCreateOrder = async (req, res) => {
+  const { razorpay_order_id, razorpay_payment_id, razorpay_signature } =
+    req.body;
+
+  if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+    return res
+      .status(400)
+      .json({ success: false, message: "Missing payment fields" });
+  }
+
+  // 1. Verify signature
+  const secret = process.env.RAZORPAY_KEY_SECRET;
+  const generatedSignature = crypto
+    .createHmac("sha256", secret)
+    .update(`${razorpay_order_id}|${razorpay_payment_id}`)
+    .digest("hex");
+
+  if (generatedSignature !== razorpay_signature) {
+    return res
+      .status(400)
+      .json({ success: false, message: "Invalid payment signature" });
+  }
+
+  // 2. Fetch the Razorpay order to retrieve the notes saved during initiation
+  let razorpayOrder;
+  try {
+    razorpayOrder = await razorpayInstance.orders.fetch(razorpay_order_id);
+  } catch (err) {
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to fetch Razorpay order" });
+  }
+
+  const notes = razorpayOrder.notes;
+  const userId = parseInt(notes.user_id);
+  const cartId = parseInt(notes.cart_id);
+  const shipping_address_id = parseInt(notes.shipping_address_id);
+  const billing_address_id = parseInt(notes.billing_address_id);
+  const coupon_code = notes.coupon_code || null;
+  const shipping_cost = parseFloat(notes.shipping_cost) || 0;
+  const tax_amount = parseFloat(notes.tax_amount) || 0;
+
+  // 3. Re-fetch cart items (always use latest DB prices — never trust client data)
   const items = await getCartItems(cartId);
   if (items.length === 0) {
-    return res.status(400).json({ success: false, message: "Cart is empty" });
-  }
-
-  // Calculate subtotal
-  let subtotal = 0;
-  for (const item of items) {
-    subtotal += item.quantity * item.unit_price;
+    return res
+      .status(400)
+      .json({ success: false, message: "Cart is empty or already cleared" });
   }
 
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
 
-    // 1. Stock checks & reservation (unchanged)
+    // --- A) Stock checks (lock rows with FOR UPDATE) ---
     for (const item of items) {
       const [stockRow] = await connection.query(
-        "SELECT available_stock FROM product_items WHERE id = ? FOR UPDATE",
-        [item.product_item_id],
+        "SELECT available_stock FROM product WHERE id = ? FOR UPDATE",
+        [item.product_id],
       );
-      if (stockRow[0].available_stock < item.quantity) {
+      if (!stockRow.length || stockRow[0].available_stock < item.quantity) {
         await connection.rollback();
         return res.status(400).json({
           success: false,
@@ -142,111 +487,54 @@ export const createOrder = async (req, res) => {
         });
       }
     }
+
+    // --- B) Deduct stock ---
     for (const item of items) {
       await connection.query(
-        "UPDATE product_items SET available_stock = available_stock - ? WHERE id = ?",
-        [item.quantity, item.product_item_id],
+        "UPDATE product SET available_stock = available_stock - ? WHERE id = ?",
+        [item.quantity, item.product_id],
       );
       await connection.query(
-        `INSERT INTO product_stock (product_item_id, quantity, reserved_quantity)
+        `INSERT INTO product_stock (product_id, quantity, reserved_quantity)
          VALUES (?, ?, ?)
          ON DUPLICATE KEY UPDATE reserved_quantity = reserved_quantity + ?`,
-        [item.product_item_id, 0, item.quantity, item.quantity],
+        [item.product_id, 0, item.quantity, item.quantity],
       );
     }
 
-    // 2. Coupon validation (using your schema)
+    // --- C) Re-validate coupon inside the transaction ---
+    let subtotal = items.reduce((sum, i) => sum + i.quantity * i.unit_price, 0);
     let discount_amount = 0;
     let appliedCouponId = null;
 
     if (coupon_code) {
-      // Fetch coupon details
-      const [couponRows] = await connection.query(
-        `SELECT * FROM coupons
-         WHERE code = ? AND valid_from <= NOW() AND valid_to >= NOW()
-         FOR UPDATE`,
-        [coupon_code],
-      );
-
-      if (couponRows.length === 0) {
+      try {
+        ({ discount_amount, appliedCouponId } = await validateCoupon(
+          connection,
+          coupon_code,
+          subtotal,
+          userId,
+        ));
+      } catch (err) {
         await connection.rollback();
         return res
-          .status(400)
-          .json({ success: false, message: "Invalid or expired coupon" });
+          .status(err.status || 400)
+          .json({ success: false, message: err.message });
       }
-
-      const coupon = couponRows[0];
-
-      // Check minimum order amount
-      console.log(subtotal);
-
-      if (subtotal < coupon.min_order_amount) {
-        await connection.rollback();
-        return res.status(400).json({
-          success: false,
-          message: `Minimum order amount of ₹${coupon.min_order_amount} required for this coupon`,
-        });
-      }
-
-      // Check per‑user usage limit
-      if (coupon.usage_limit_per_user !== null) {
-        const [userUsage] = await connection.query(
-          `SELECT COUNT(*) as count FROM orders
-           WHERE user_id = ? AND coupon_id = ?`,
-          [userId, coupon.id],
-        );
-        if (userUsage[0].count >= coupon.usage_limit_per_user) {
-          await connection.rollback();
-          return res.status(400).json({
-            success: false,
-            message: `You have already used this coupon ${coupon.usage_limit_per_user} time(s)`,
-          });
-        }
-      }
-
-      // Check global total usage limit
-      if (coupon.total_usage_limit !== null) {
-        const [globalUsage] = await connection.query(
-          `SELECT COUNT(*) as count FROM orders WHERE coupon_id = ?`,
-          [coupon.id],
-        );
-        if (globalUsage[0].count >= coupon.total_usage_limit) {
-          await connection.rollback();
-          return res.status(400).json({
-            success: false,
-            message: "This coupon has reached its global usage limit",
-          });
-        }
-      }
-
-      // Calculate discount
-      if (coupon.discount_type === "percentage") {
-        discount_amount = (subtotal * coupon.discount_value) / 100;
-        if (
-          coupon.max_discount_amount &&
-          discount_amount > coupon.max_discount_amount
-        ) {
-          discount_amount = coupon.max_discount_amount;
-        }
-      } else {
-        // fixed amount
-        discount_amount = Math.min(coupon.discount_value, subtotal);
-      }
-
-      appliedCouponId = coupon.id;
     }
 
-    // 3. Calculate total
+    // --- D) Final totals ---
     const total_amount =
       subtotal + shipping_cost + tax_amount - discount_amount;
-
-    // 4. Insert order (with coupon_id and payment_method)
+    console.log(appliedCouponId, "applied#$%^&*()*&^%$#%^&*(");
+    // --- E) Insert order ---
     const [orderResult] = await connection.query(
       `INSERT INTO orders
-         (user_id, shipping_address_id, billing_address_id, subtotal, shipping_cost,
-          tax_amount, discount_amount, total_amount, currency_code, customer_notes,
-          payment_status, payment_method, coupon_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+         (user_id, shipping_address_id, billing_address_id,
+          subtotal, shipping_cost, tax_amount, discount_amount, total_amount,
+          currency_code, payment_status, payment_method, coupon_id,
+          razorpay_order_id, razorpay_payment_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'INR', 'paid', 'razorpay', ?, ?, ?)`,
       [
         userId,
         shipping_address_id,
@@ -256,29 +544,27 @@ export const createOrder = async (req, res) => {
         tax_amount,
         discount_amount,
         total_amount,
-        currency_code,
-        customer_notes,
-        payment_method,
         appliedCouponId,
+        razorpay_order_id,
+        razorpay_payment_id,
       ],
     );
     const orderId = orderResult.insertId;
 
-    // 5. Create order_items with snapshots (unchanged)
+    // --- F) Insert order items (snapshot prices at time of purchase) ---
     for (const item of items) {
       const snapshot = {
         product_name: item.product_name,
         sku: item.sku,
-        variation: null,
         unit_price_at_purchase: item.unit_price,
       };
       await connection.query(
         `INSERT INTO order_items
-           (order_id, product_item_id, quantity, unit_price, product_data_snapshot)
+           (order_id, product_id, quantity, unit_price, product_data_snapshot)
          VALUES (?, ?, ?, ?, ?)`,
         [
           orderId,
-          item.product_item_id,
+          item.product_id,
           item.quantity,
           item.unit_price,
           JSON.stringify(snapshot),
@@ -286,103 +572,87 @@ export const createOrder = async (req, res) => {
       );
     }
 
-    // 6. Clear cart
+    // --- G) Insert transaction record ---
+    await connection.query(
+      `INSERT INTO transactions
+         (order_id, payment_method, transaction_type, amount, currency_code,
+          gateway_order_id, gateway_reference_id, status, gateway_response)
+       VALUES (?, 'razorpay', 'payment', ?, 'INR', ?, ?, 'success', ?)`,
+      [
+        orderId,
+        total_amount,
+        razorpay_order_id,
+        razorpay_payment_id,
+        JSON.stringify({
+          razorpay_order_id,
+          razorpay_payment_id,
+          razorpay_signature,
+        }),
+      ],
+    );
+
+    // --- H) Create shipment row ---
+    const [addressRows] = await connection.query(
+      `SELECT full_name, phone, line1, line2, landmark, city, state, postal_code
+       FROM user_addresses WHERE id = ?`,
+      [shipping_address_id],
+    );
+
+    if (!addressRows.length) {
+      await connection.rollback();
+      return res
+        .status(400)
+        .json({ success: false, message: "Shipping address not found" });
+    }
+
+    const addr = addressRows[0];
+    const fullAddressString = [
+      addr.full_name,
+      addr.line1,
+      addr.line2,
+      addr.landmark,
+      `${addr.city}, ${addr.state} - ${addr.postal_code}`,
+      `Phone: ${addr.phone}`,
+    ]
+      .filter(Boolean)
+      .join(", ");
+
+    await connection.query(
+      `INSERT INTO shipments (order_id, recipient_address, current_status)
+       VALUES (?, ?, 'pending')`,
+      [orderId, fullAddressString],
+    );
+
+    // --- I) Clear cart ---
     await connection.query("UPDATE cart SET items = ? WHERE id = ?", [
       JSON.stringify([]),
       cartId,
     ]);
 
-    // 7. Audit log
-    const [newOrderRow] = await connection.query(
-      "SELECT * FROM orders WHERE id = ?",
-      [orderId],
-    );
-    await logAudit({
-      userId: req.user.id,
-      action: "CREATE_ORDER",
-      tableName: "orders",
-      recordId: orderId,
-      oldData: null,
-      newData: newOrderRow[0],
-      req,
-    });
-
     await connection.commit();
 
-    // 8. Send email (unchanged, but include coupon info if needed)
-    const [orderData] = await pool.query(
-      `SELECT o.*, 
-          u.full_name as customer_name,
-          u.email as customer_email,
-          sa.full_name as shipping_full_name,
-          sa.phone as shipping_phone,
-          sa.line1 as shipping_line1,
-          sa.line2 as shipping_line2,
-          sa.landmark as shipping_landmark,
-          sa.city as shipping_city,
-          sa.state as shipping_state,
-          sa.postal_code as shipping_postal_code,
-          ba.full_name as billing_full_name,
-          ba.line1 as billing_line1,
-          ba.city as billing_city,
-          ba.state as billing_state,
-          ba.postal_code as billing_postal_code
-       FROM orders o
-       JOIN users u ON o.user_id = u.id
-       LEFT JOIN user_addresses sa ON o.shipping_address_id = sa.id
-       LEFT JOIN user_addresses ba ON o.billing_address_id = ba.id
-       WHERE o.id = ?`,
-      [orderId],
+    // Respond before sending email
+    res.status(201).json({
+      success: true,
+      data: {
+        order_id: orderId,
+        total_amount,
+        payment_id: razorpay_payment_id,
+      },
+    });
+
+    // Fire-and-forget confirmation email
+    sendOrderConfirmationEmail({ orderId, userId, total_amount }).catch((err) =>
+      console.error("Order email error:", err),
     );
-
-    const order = orderData[0];
-    const shippingAddressString = `${order.shipping_line1 || ""} ${order.shipping_line2 || ""}\n${order.shipping_city || ""}, ${order.shipping_state || ""} ${order.shipping_postal_code || ""}`;
-
-    const [orderItems] = await pool.query(
-      `SELECT oi.product_item_id, oi.quantity, oi.unit_price, 
-          JSON_UNQUOTE(JSON_EXTRACT(oi.product_data_snapshot, '$.product_name')) as product_name
-       FROM order_items oi
-       WHERE oi.order_id = ?`,
-      [orderId],
-    );
-
-    const orderDetails = {
-      order_id: order.id,
-      order_date: order.order_date,
-      order_status: order.order_status,
-      customer_name: order.customer_name || "Valued Customer",
-      subtotal: parseFloat(order.subtotal),
-      shipping_cost: parseFloat(order.shipping_cost),
-      tax_amount: parseFloat(order.tax_amount),
-      discount_amount: parseFloat(order.discount_amount),
-      total_amount: parseFloat(order.total_amount),
-      currency_code: order.currency_code,
-      customer_notes: order.customer_notes || "",
-      shipping_address: shippingAddressString,
-      items: orderItems.map((item) => ({
-        product_name: item.product_name,
-        quantity: item.quantity,
-        unit_price: parseFloat(item.unit_price),
-      })),
-    };
-    res
-      .status(201)
-      .json({ success: true, data: { order_id: orderId, total_amount } });
-    try {
-      await sendOrderConfirmationEmail(order.customer_email, orderDetails);
-    } catch (emailErr) {
-      console.error("Email error:", emailErr);
-    }
   } catch (error) {
     await connection.rollback();
-    console.error(error);
+    console.error("Order Creation Error:", error);
     res.status(500).json({ success: false, message: "Order creation failed" });
   } finally {
     connection.release();
   }
 };
-// The rest of your functions (getUserOrders, getOrderDetails, updateOrderStatus, getAllOrders) remain unchanged
-// because they only touch orders/order_items, not the cart.
 
 export const getOrderDetails = async (req, res) => {
   const { id } = req.params;
@@ -400,7 +670,7 @@ export const getOrderDetails = async (req, res) => {
         .json({ success: false, message: "Order not found" });
     }
     const [items] = await pool.query(
-      `SELECT id, product_item_id, quantity, unit_price, total_price, product_data_snapshot
+      `SELECT id, product_id, quantity, unit_price, total_price, product_data_snapshot
              FROM order_items WHERE order_id = ?`,
       [id],
     );
@@ -489,19 +759,19 @@ export const updateOrderStatus = async (req, res) => {
     if (order_status === "cancelled" && oldStatus !== "cancelled") {
       // Restore available_stock for each order item
       const [items] = await pool.query(
-        "SELECT product_item_id, quantity FROM order_items WHERE order_id = ?",
+        "SELECT product_id, quantity FROM order_items WHERE order_id = ?",
         [id],
       );
       for (const item of items) {
         await pool.query(
           "UPDATE product_items SET available_stock = available_stock + ? WHERE id = ?",
-          [item.quantity, item.product_item_id],
+          [item.quantity, item.product_id],
         );
         // Also reduce reserved_quantity in product_stock
         await pool.query(
           `UPDATE product_stock SET reserved_quantity = GREATEST(reserved_quantity - ?, 0)
-                     WHERE product_item_id = ?`,
-          [item.quantity, item.product_item_id],
+                     WHERE product_id = ?`,
+          [item.quantity, item.product_id],
         );
       }
     }
@@ -511,55 +781,6 @@ export const updateOrderStatus = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
-
-// ========== ADMIN: get all orders (with pagination & filters) ==========
-// export const getAllOrders = async (req, res) => {
-//   const page = parseInt(req.query.page) || 1;
-//   const limit = parseInt(req.query.limit) || 10;
-//   const offset = (page - 1) * limit;
-//   const status = req.query.status;
-//   let whereClause = "";
-//   let params = [];
-//   if (
-//     status &&
-//     [
-//       "pending",
-//       "confirmed",
-//       "processing",
-//       "shipped",
-//       "delivered",
-//       "cancelled",
-//       "refunded",
-//     ].includes(status)
-//   ) {
-//     whereClause = "WHERE order_status = ?";
-//     params.push(status);
-//   }
-//   try {
-//     const [countResult] = await pool.query(
-//       `SELECT COUNT(*) as total FROM orders ${whereClause}`,
-//       params,
-//     );
-//     const total = countResult[0].total;
-//     const [rows] = await pool.query(
-//       `SELECT o.*, u.full_name as customer_name
-//              FROM orders o
-//              LEFT JOIN users u ON o.user_id = u.id
-//              ${whereClause}
-//              ORDER BY o.order_date DESC
-//              LIMIT ? OFFSET ?`,
-//       [...params, limit, offset],
-//     );
-//     res.json({
-//       success: true,
-//       data: rows,
-//       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
-//     });
-//   } catch (error) {
-//     console.error(error);
-//     res.status(500).json({ success: false, message: "Server error" });
-//   }
-// };
 
 export const getAllOrders = async (req, res) => {
   const page = parseInt(req.query.page) || 1;
@@ -656,26 +877,29 @@ export const getAllOrders = async (req, res) => {
     let orderItemsMap = {};
 
     if (orderIds.length > 0) {
-      // Get all order items with product and variation details
+      // Get all order items with product details (now directly from product table)
       const [items] = await pool.query(
         `SELECT 
-          oi.*,
+          oi.id,
+          oi.order_id,
+          oi.product_id,
+          oi.quantity,
+          oi.unit_price,
+          oi.total_price,
           oi.product_data_snapshot as product_snapshot,
           p.name as product_name,
           p.slug as product_slug,
           p.status as product_status,
-          pi.sku as product_sku,
-          pi.variation_value as variation,
-          pi.price as current_price,
-          pi.weight,
-          pi.width,
-          pi.height,
-          pi.depth,
-          pi.is_available,
-          pi.available_stock
+          p.sku as product_sku,
+          p.price as current_price,
+          p.weight,
+          p.width,
+          p.height,
+          p.depth,
+          p.is_available,
+          p.available_stock
         FROM order_items oi
-        LEFT JOIN product_items pi ON oi.product_item_id = pi.id
-        LEFT JOIN products p ON pi.product_id = p.id
+        LEFT JOIN product p ON oi.product_id = p.id
         WHERE oi.order_id IN (?)
         ORDER BY oi.order_id, oi.id`,
         [orderIds],
@@ -698,16 +922,17 @@ export const getAllOrders = async (req, res) => {
 
         acc[item.order_id].push({
           id: item.id,
-          product_item_id: item.product_item_id,
+          product_id: item.product_id, // renamed from product_item_id
           quantity: item.quantity,
           unit_price: item.unit_price,
           total_price: item.total_price,
           product: {
-            id: item.product_id,
+            id: item.product_id, // product id directly
             name: item.product_name || productSnapshot?.product_name,
             slug: item.product_slug,
             sku: item.product_sku || productSnapshot?.sku,
-            variation: item.variation || productSnapshot?.variation,
+            // variation may be stored in snapshot, if needed:
+            variation: productSnapshot?.variation || null,
             status: item.product_status,
             current_price: item.current_price,
             weight: item.weight,

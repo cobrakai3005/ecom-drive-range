@@ -1,3 +1,4 @@
+/*
 export const sql = `
         CREATE TABLE IF NOT EXISTS users (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -108,6 +109,7 @@ CREATE TABLE IF NOT EXISTS vehicle_makes (
     INDEX idx_name (name)
 );
 
+
 -- =============================================
 -- VEHICLE MODELS (e.g., Camry, Civic, F-150)
 -- =============================================
@@ -134,6 +136,7 @@ CREATE TABLE IF NOT EXISTS vehicle_generations (
     generation_name VARCHAR(100) NULL,          -- e.g., 'XV70', '10th Gen', 'Facelift'
     year_from INT NOT NULL,                     -- start year (e.g., 2018)
     year_to INT NULL,                           -- end year (e.g., 2022), NULL if current
+    status ENUM('active', 'inactive') DEFAULT 'active' NOT NULL,
     engine_options TEXT NULL,                   -- optional: JSON or comma-separated
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -148,31 +151,31 @@ CREATE TABLE IF NOT EXISTS vehicle_generations (
 -- ===========================================
 -- 4. PRODUCTS table
 -- ===========================================
-CREATE TABLE IF NOT EXISTS products (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    category_id INT NOT NULL,
-    sub_category_id INT NOT NULL,
-    brand_id INT NOT NULL,
-    name VARCHAR(200) NOT NULL,
-    slug VARCHAR(200) NOT NULL,
-    short_description TEXT,
-    long_description TEXT,
-    seo_title VARCHAR(200),
-    seo_description TEXT,
-    seo_keywords VARCHAR(500),
-    status ENUM('active', 'inactive') DEFAULT 'active',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE RESTRICT ON UPDATE CASCADE,
-    FOREIGN KEY (sub_category_id) REFERENCES subcategory(id) ON DELETE RESTRICT ON UPDATE CASCADE,
-    FOREIGN KEY (brand_id) REFERENCES brands(id) ON DELETE RESTRICT ON UPDATE CASCADE,
+    CREATE TABLE IF NOT EXISTS products (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        category_id INT NOT NULL,
+        sub_category_id INT NOT NULL,
+        brand_id INT NOT NULL,
+        name VARCHAR(200) NOT NULL,
+        slug VARCHAR(200) NOT NULL,
+        short_description TEXT,
+        long_description TEXT,
+        seo_title VARCHAR(200),
+        seo_description TEXT,
+        seo_keywords VARCHAR(500),
+        status ENUM('active', 'inactive') DEFAULT 'active',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE RESTRICT ON UPDATE CASCADE,
+        FOREIGN KEY (sub_category_id) REFERENCES subcategory(id) ON DELETE RESTRICT ON UPDATE CASCADE,
+        FOREIGN KEY (brand_id) REFERENCES brands(id) ON DELETE RESTRICT ON UPDATE CASCADE,
 
-     -- Indexes
-    UNIQUE INDEX idx_products_slug (slug),
-    INDEX idx_products_category_id (category_id),
-    INDEX idx_products_sub_category_id (sub_category_id),
-    INDEX idx_products_status (status)
-);
+        -- Indexes
+        UNIQUE INDEX idx_products_slug (slug),
+        INDEX idx_products_category_id (category_id),
+        INDEX idx_products_sub_category_id (sub_category_id),
+        INDEX idx_products_status (status)
+    );
 
 
 
@@ -299,19 +302,6 @@ token VARCHAR(255) PRIMARY KEY,
  created_at TIMESTAMP,
   last_used TIMESTAMP);
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 -- =============================================
 -- 12. ORDERS table
 -- =============================================
@@ -326,13 +316,16 @@ CREATE TABLE IF NOT EXISTS orders (
     shipping_cost DECIMAL(10,2) DEFAULT 0.00,
     tax_amount DECIMAL(10,2) DEFAULT 0.00,
     discount_amount DECIMAL(10,2) DEFAULT 0.00,
-    payment_method ENUM('card', 'upi', 'bank_transfer', 'cash') NOT NULL DEFAULT 'card',
+    payment_method ENUM('card', 'upi', 'bank_transfer', 'cash', 'razorpay') ,
     total_amount DECIMAL(10,2) NOT NULL,
     currency_code VARCHAR(3) DEFAULT 'USD',
     customer_notes TEXT,
     admin_notes TEXT,
     payment_status ENUM('pending', 'paid', 'failed', 'refunded') DEFAULT 'pending',
     return_date TIMESTAMP NULL,
+
+    razorpay_order_id VARCHAR(255),
+    razorpay_payment_id VARCHAR(255),
 
     -- === NEW COLUMNS ===
     coupon_id INT NULL,                                    -- References the coupon used
@@ -402,22 +395,31 @@ CREATE TABLE IF NOT EXISTS coupons (
 CREATE TABLE IF NOT EXISTS transactions (
     id INT AUTO_INCREMENT PRIMARY KEY,
     order_id INT NOT NULL,
-    payment_method ENUM('card', 'upi', 'bank_transfer', 'cash') NOT NULL,  -- new column
-    transaction_type ENUM('authorisation', 'capture', 'refund', 'void') NOT NULL,
+    payment_method ENUM('card', 'upi', 'bank_transfer', 'cash', 'razorpay') ,
+    transaction_type ENUM('payment', 'authorisation', 'capture', 'refund', 'void') NOT NULL, -- Added 'payment'
     amount DECIMAL(12, 2) NOT NULL CHECK (amount > 0),
     currency_code CHAR(3) DEFAULT 'IND',
-    gateway_reference_id VARCHAR(255),
+    
+    -- 🔥 Two separate gateway IDs
+    gateway_order_id VARCHAR(255) NULL,      -- Razorpay order_id / PhonePe merchantOrderId (Initial)
+    gateway_reference_id VARCHAR(255) NULL,  -- Razorpay payment_id / PhonePe transactionId (Final)
+    
     status ENUM('pending', 'success', 'failed') DEFAULT 'pending',
     error_message TEXT,
+    
+    -- 🔥 Save raw webhook data for debugging
+    gateway_response JSON NULL,
+    
     transaction_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     
     FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE RESTRICT ON UPDATE CASCADE,
     INDEX idx_order_id (order_id),
-    INDEX idx_payment_method (payment_method),      -- new index (optional)
+    INDEX idx_payment_method (payment_method),
     INDEX idx_transaction_type (transaction_type),
     INDEX idx_status (status),
+    INDEX idx_gateway_order (gateway_order_id),      -- Index this for lookups
     INDEX idx_gateway_reference (gateway_reference_id),
     INDEX idx_transaction_date (transaction_date)
 );
@@ -489,7 +491,7 @@ CREATE TABLE IF NOT EXISTS warranty_registrations (
 CREATE TABLE IF NOT EXISTS reviews (
     id INT AUTO_INCREMENT PRIMARY KEY,
     user_id INT NOT NULL,
-    product_item_id INT NOT NULL,
+    product_id INT NOT NULL,
     order_item_id INT NOT NULL,
     rating INT NOT NULL CHECK (rating >= 1 AND rating <= 5),
     title VARCHAR(200),
@@ -506,6 +508,47 @@ CREATE TABLE IF NOT EXISTS reviews (
     INDEX idx_product_item_id (product_item_id),
     INDEX idx_order_item_id (order_item_id),
     INDEX idx_rating (rating),
+    INDEX idx_status (status)
+);
+
+
+
+CREATE TABLE IF NOT EXISTS product_reviews (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+
+    product_id INT NOT NULL,
+    user_id INT NOT NULL,
+    order_id INT DEFAULT NULL,
+
+    rating TINYINT NOT NULL CHECK (rating BETWEEN 1 AND 5),
+    review TEXT DEFAULT NULL,
+    is_verified_purchase BOOLEAN DEFAULT FALSE,
+
+    status ENUM('pending', 'approved', 'rejected') DEFAULT 'pending',
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        ON UPDATE CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_review_product
+        FOREIGN KEY (product_id)
+        REFERENCES product(id)
+        ON DELETE CASCADE,
+
+    CONSTRAINT fk_review_user
+        FOREIGN KEY (user_id)
+        REFERENCES users(id)
+        ON DELETE CASCADE,
+
+    CONSTRAINT fk_review_order
+        FOREIGN KEY (order_id)
+        REFERENCES orders(id)
+        ON DELETE SET NULL,
+
+    UNIQUE KEY unique_user_product_order (user_id, product_id, order_id),
+
+    INDEX idx_product (product_id),
+    INDEX idx_user (user_id),
     INDEX idx_status (status)
 );
 
@@ -534,6 +577,266 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 
 
+-- =============================================
+-- 28. Shipments
+-- =============================================
+CREATE TABLE IF NOT EXISTS shipments (
+ id INT PRIMARY KEY AUTO_INCREMENT,
+    order_id INT NOT NULL,
+    tracking_number VARCHAR(100),
+    carrier VARCHAR(30),
+    label_url VARCHAR(500),
+    recipient_address TEXT, -- copied from order
+    current_status VARCHAR(30) DEFAULT 'pending',
+    tracking_history JSON DEFAULT NULL, -- stores all scan events
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX (order_id)
+);
 
+
+
+`;
+
+*/
+
+export const sql = `
+          CREATE TABLE IF NOT EXISTS users (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+
+    role ENUM('Customer', 'Admin', 'Staff') DEFAULT 'Customer',
+
+    profile_image TEXT,
+
+    phone VARCHAR(15) UNIQUE NOT NULL,
+
+    full_name VARCHAR(100)  NOT NULL,
+    email VARCHAR(100) UNIQUE NOT NULL,
+
+    otp VARCHAR(6),
+
+    otp_verify BOOLEAN DEFAULT FALSE,
+
+    otp_expire TIMESTAMP NULL,
+
+    profile_image_id TEXT,
+
+    password TEXT,
+
+    is_delete BOOLEAN DEFAULT FALSE,
+    
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+
+CREATE TABLE IF NOT EXISTS user_addresses (
+   id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    address_type ENUM('billing', 'shipping', 'returns') NOT NULL,
+    full_name VARCHAR(100) NOT NULL,          -- Recipient name (optional but useful)
+    phone VARCHAR(15) NOT NULL,               -- Alternative contact for delivery
+    line1 VARCHAR(255) NOT NULL,              -- House/building, street, area
+    line2 VARCHAR(255) DEFAULT NULL,          -- Landmark, nearby location
+    landmark VARCHAR(255) DEFAULT NULL,       -- Explicit landmark field (common in India)
+    city VARCHAR(100) NOT NULL,
+    state VARCHAR(100) NOT NULL,              -- Indian states (e.g., 'Maharashtra')
+    postal_code CHAR(6) NOT NULL,             -- PIN code – always 6 digits
+    country VARCHAR(100) DEFAULT 'India',
+    is_default BOOLEAN DEFAULT FALSE,
+    is_deleted BOOLEAN DEFAULT FALSE,         -- Soft delete flag
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    INDEX idx_user_id (user_id),
+    INDEX idx_postal_code (postal_code)       -- Useful for zone-based delivery
+);
+
+
+
+
+
+-- =============================================
+-- 1. CATEGORIES table
+-- =============================================
+CREATE TABLE IF NOT EXISTS categories (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    description TEXT,
+    image_url VARCHAR(255),
+ 
+    is_front BOOLEAN DEFAULT 0 NOT NULL ,
+    status ENUM('active', 'inactive') DEFAULT 'active'
+);
+
+-- =============================================
+-- 2. SUBCATEGORY table
+-- =============================================
+CREATE TABLE IF NOT EXISTS subcategory (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    category_id INT NOT NULL,
+    name VARCHAR(100) NOT NULL,
+    description TEXT,
+    image_url VARCHAR(255),
+    is_front TINYINT(1) DEFAULT 0 NOT NULL, 
+
+    status ENUM('active', 'inactive') DEFAULT 'active',
+    FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE RESTRICT ON UPDATE CASCADE
+);
+
+-- =============================================
+-- 3. BRANDS table
+-- =============================================
+CREATE TABLE IF NOT EXISTS brands (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    logo_url VARCHAR(255),
+    website VARCHAR(255),
+    status ENUM('active', 'inactive') DEFAULT 'active' NOT NULL
+);
+
+-- ===========================================
+-- 4. PRODUCTS table
+-- ===========================================
+
+CREATE TABLE IF NOT EXISTS product (
+    -- Product fields
+    id INT NOT NULL  AUTO_INCREMENT PRIMARY KEY,
+    category_id INT NOT NULL,
+    sub_category_id INT NOT NULL,
+    brand_id INT  NULL,
+    name VARCHAR(200) NOT NULL,
+    slug VARCHAR(200) NOT NULL,
+    short_description TEXT,
+    long_description TEXT,
+    seo_title VARCHAR(200),
+    seo_description TEXT,
+    seo_keywords VARCHAR(500),
+    status ENUM('active', 'inactive') DEFAULT 'active',
+    product_created_at TIMESTAMP,
+    product_updated_at TIMESTAMP,
+    sku VARCHAR(100) NOT NULL UNIQUE,
+    price DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+    weight DECIMAL(8,2),
+    width DECIMAL(8,2),
+    height DECIMAL(8,2),
+    depth DECIMAL(8,2),
+    is_available BOOLEAN DEFAULT TRUE,
+    is_featured BOOLEAN DEFAULT TRUE,
+    is_front BOOLEAN DEFAULT TRUE,
+    available_stock INT NOT NULL DEFAULT 0,
+    item_created_at TIMESTAMP,
+    item_updated_at TIMESTAMP
+);
+
+
+
+CREATE TABLE IF NOT EXISTS product_media (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    product_id INT NOT NULL,
+    image_url VARCHAR(500) NOT NULL,
+    image_url_id VARCHAR(255) NULL COMMENT 'Cloudinary public ID for deletion', -- Added here
+    sort_order INT DEFAULT 0,
+    status ENUM('active', 'inactive') DEFAULT 'active' NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE ON UPDATE CASCADE,
+    
+    INDEX idx_product_id (product_id),
+    INDEX idx_sort_order (sort_order),
+    INDEX idx_status (status)
+);
+
+
+
+-- =============================================
+-- 10. CART table (supports both logged-in users and guests)
+-- =============================================
+
+CREATE TABLE IF NOT EXISTS cart (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NULL,
+    session_token VARCHAR(255) NULL,
+    items JSON NOT NULL DEFAULT (JSON_ARRAY()),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_user_id (user_id),
+    INDEX idx_session_token (session_token),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE
+);
+-- =============================================
+-- 11 product_reviews table (supports verified_purcahse a)
+-- =============================================
+
+CREATE TABLE IF NOT EXISTS product_reviews (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+
+    product_id INT NOT NULL,
+    user_id INT NOT NULL,
+    order_item_id INT DEFAULT NULL,
+
+    rating TINYINT NOT NULL CHECK (rating BETWEEN 1 AND 5),
+    review TEXT DEFAULT NULL,
+    is_verified_purchase BOOLEAN DEFAULT FALSE,
+
+    status ENUM('pending', 'approved', 'rejected') DEFAULT 'pending',
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        ON UPDATE CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_review_product
+        FOREIGN KEY (product_id)
+        REFERENCES product(id)
+        ON DELETE CASCADE,
+
+    CONSTRAINT fk_review_user
+        FOREIGN KEY (user_id)
+        REFERENCES users(id)
+        ON DELETE CASCADE,
+
+    CONSTRAINT fk_review_order
+        FOREIGN KEY (order_item_id)
+        REFERENCES order_items(id)
+        ON DELETE SET NULL,
+
+    UNIQUE KEY unique_user_product_order (user_id, product_id, order_item_id),
+
+    INDEX idx_product (product_id),
+    INDEX idx_user (user_id),
+    INDEX idx_status (status)
+);
+
+-- =============================================
+-- 11 Website Revoiew table (supports any one)
+-- =============================================
+CREATE TABLE website_reviews (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+
+
+    rating TINYINT NOT NULL CHECK (rating BETWEEN 1 AND 5),
+    review TEXT DEFAULT NULL,
+    status ENUM('pending', 'approved', 'rejected')
+        DEFAULT 'pending',
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        ON UPDATE CURRENT_TIMESTAMP,
+
+   
+
+    CONSTRAINT fk_service_review_user
+        FOREIGN KEY (user_id)
+        REFERENCES users(id)
+        ON DELETE CASCADE,
+
+
+
+    
+    INDEX idx_user (user_id),
+    INDEX idx_status (status)
+);
 
 `;

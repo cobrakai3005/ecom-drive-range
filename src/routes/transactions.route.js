@@ -14,7 +14,7 @@ const router = express.Router();
 // @desc    Get all transactions for an order
 // @access  Admin, Staff, Customer (own order)
 router.get(
-  "/order/:orderId",
+  "/",
   verifyToken,
   authorize("Admin", "Staff", "Customer"),
   getAllTransactions,

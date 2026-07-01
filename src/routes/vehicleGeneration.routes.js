@@ -5,6 +5,7 @@ import {
   createGeneration,
   updateGeneration,
   deleteGeneration,
+  getAvailableVehicleGenerations,
 } from "../controllers/vehicleGeneration.controller.js";
 import verifyToken from "../middlewares/auth.middleware.js";
 import { authorize } from "../middlewares/authorize.middleware.js";
@@ -13,6 +14,7 @@ const router = express.Router();
 
 // Public routes (read-only)
 router.get("/get_all_generations", getAllGenerations);
+router.get("/get_all_available_generation/:productId", getAvailableVehicleGenerations);
 router.get("/get_generation_by_id/:id", getGenerationById);
 
 // Admin only routes

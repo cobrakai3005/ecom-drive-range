@@ -237,7 +237,7 @@ export const getAllReturns = async (req, res) => {
   const totalPages = Math.ceil(totalItems / limit);
 
   const [returns] = await pool.query(
-    `SELECT r.*, o.id AS order_number, u.full_name as user_name
+    `SELECT r.*, o.id AS order_number, u.full_name as customer_name, u.email as customer_email, u.phone as customer_phone
      FROM returns r
      JOIN orders o ON r.order_id = o.id
      JOIN users u ON r.user_id = u.id

@@ -1,23 +1,25 @@
 // controllers/productController.js
 import pool from "../config/db.js";
+import cloudinary from "../config/cloudinary.js";
 
-// Helper: generate unique slug from name
+// ------------------- HELPERS -------------------
 const generateSlug = (name) => {
   return name
     .toLowerCase()
     .trim()
-    .replace(/[^\w\s-]/g, "") // remove special chars
-    .replace(/\s+/g, "-") // replace spaces with hyphens
-    .replace(/-+/g, "-"); // remove multiple hyphens
+    .replace(/[^\w\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-");
 };
 
 const makeSlugUnique = async (slug, currentId = null) => {
   let uniqueSlug = slug;
   let counter = 1;
   let exists = true;
+
   while (exists) {
     const [rows] = await pool.query(
-      "SELECT id FROM products WHERE slug = ? AND (id != ? OR ? IS NULL)",
+      "SELECT id FROM product WHERE slug = ? AND (id != ? OR ? IS NULL)",
       [uniqueSlug, currentId || 0, currentId],
     );
     if (rows.length === 0) {
@@ -30,313 +32,398 @@ const makeSlugUnique = async (slug, currentId = null) => {
   return uniqueSlug;
 };
 
-//  GET products with filters, pagination, search
-// export const getAllProducts = async (req, res) => {
-//   try {
-//     // Pagination
-//     const page = parseInt(req.query.page) || 1;
-//     const limit = parseInt(req.query.limit) || 10;
-//     const offset = (page - 1) * limit;
+// Helper to get product media
+const getProductMedia = async (productId) => {
+  const [media] = await pool.query(
+    "SELECT id, image_url, image_url_id, sort_order, status FROM product_media WHERE product_id = ? ORDER BY sort_order ASC",
+    [productId],
+  );
+  return media;
+};
 
-//     // Filters
-//     const status = req.query.status; // 'active' or 'inactive' (optional)
-//     const category_id = req.query.category_id;
-//     const sub_category_id = req.query.sub_category_id;
-//     const brand_id = req.query.brand_id;
-//     const search = req.query.search;
+// ------------------- CONTROLLERS -------------------
 
-//     let whereConditions = [];
-//     let params = [];
-
-//     // Base conditions: product status defaults to 'active' unless overridden
-//     if (status && ["active", "inactive"].includes(status)) {
-//       whereConditions.push("p.status = ?");
-//       params.push(status);
-//     } else {
-//       // Default: only active products
-//       whereConditions.push("p.status = 'active'");
-//     }
-
-//     // Category must be active
-//     whereConditions.push("c.status = 'active'");
-
-//     // Subcategory: if exists, must be active; if null, ignore
-//     whereConditions.push("(sc.id IS NULL OR sc.status = 'active')");
-
-//     //Brand must be active
-//     whereConditions.push("b.status = 'active'");
-//     // Optional filters
-//     if (category_id) {
-//       whereConditions.push("p.category_id = ?");
-//       params.push(category_id);
-//     }
-//     if (sub_category_id) {
-//       whereConditions.push("p.sub_category_id = ?");
-//       params.push(sub_category_id);
-//     }
-//     if (brand_id) {
-//       whereConditions.push("p.brand_id = ?");
-//       params.push(brand_id);
-//     }
-//     if (search) {
-//       whereConditions.push("(p.name LIKE ? OR p.slug LIKE ?)");
-//       params.push(`%${search}%`, `%${search}%`);
-//     }
-
-//     const whereClause = `WHERE ${whereConditions.join(" AND ")}`;
-
-//     // Count total
-//     const countQuery = `
-//       SELECT COUNT(*) as total
-//       FROM products p
-//       LEFT JOIN categories c ON p.category_id = c.id
-//       LEFT JOIN subcategory sc ON p.sub_category_id = sc.id
-//       LEFT JOIN brands b ON p.brand_id = b.id
-
-//       ${whereClause}
-//     `;
-//     const [countResult] = await pool.query(countQuery, params);
-//     const total = countResult[0].total;
-
-//     // Fetch data with related info and variation aggregates
-//     const dataQuery = `
-//       SELECT
-//         p.*,
-//         c.name as category_name,
-//         sc.name as subcategory_name,
-//         b.name as brand_name,
-//         (SELECT MIN(price) FROM product_items WHERE product_id = p.id AND is_available = TRUE) as min_price,
-//         (SELECT MAX(price) FROM product_items WHERE product_id = p.id AND is_available = TRUE) as max_price,
-//         EXISTS (SELECT 1 FROM product_items WHERE product_id = p.id AND available_stock > 0) as in_stock,
-//         (SELECT image_url FROM product_images WHERE product_id = p.id ORDER BY sort_order LIMIT 1) as primary_image
-//       FROM products p
-//       LEFT JOIN categories c ON p.category_id = c.id
-//       LEFT JOIN subcategory sc ON p.sub_category_id = sc.id
-//       LEFT JOIN brands b ON p.brand_id = b.id
-//       ${whereClause}
-//       ORDER BY p.created_at DESC
-//       LIMIT ? OFFSET ?
-//     `;
-//     const dataParams = [...params, limit, offset];
-//     const [rows] = await pool.query(dataQuery, dataParams);
-
-//     res.json({
-//       success: true,
-//       data: rows,
-//       pagination: {
-//         page,
-//         limit,
-//         total,
-//         totalPages: Math.ceil(total / limit),
-//       },
-//     });
-//   } catch (error) {
-//     console.error(error);
-//     res.status(500).json({ success: false, message: "Server error" });
-//   }
-// };
-
+// GET /api/products
+// Query params: page, limit, search, category, brand, status, is_featured, is_front
 export const getAllProducts = async (req, res) => {
   try {
-    // Pagination
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
+    const {
+      page = 1,
+      limit = 10,
+      search = "",
+      category_id,
+      brand_id,
+      status,
+      is_featured,
+      is_front,
+      sort = "id DESC",
+    } = req.query;
+
     const offset = (page - 1) * limit;
+    const params = [];
+    let whereClauses = [];
 
-    // Filters
-    const status = req.query.status;
-    const category_id = req.query.category_id;
-    const sub_category_id = req.query.sub_category_id;
-    const brand_id = req.query.brand_id;
-    const search = req.query.search;
-
-    let whereConditions = [];
-    let params = [];
-
-    // Product status filter
-    if (status && ["active", "inactive"].includes(status)) {
-      whereConditions.push("p.status = ?");
-      params.push(status);
-    } else {
-      whereConditions.push("p.status = 'active'");
-    }
-
-    // Category must be active
-    whereConditions.push("c.status = 'active'");
-
-    // Subcategory: if exists, must be active; if null, allow it
-    whereConditions.push("(sc.id IS NULL OR sc.status = 'active')");
-
-    // ✅ FIX: Brand: if exists, must be active; if null, allow it
-    whereConditions.push("(b.id IS NULL OR b.status = 'active')");
-
-    // Optional filters
-    if (category_id) {
-      whereConditions.push("p.category_id = ?");
-      params.push(category_id);
-    }
-    if (sub_category_id) {
-      whereConditions.push("p.sub_category_id = ?");
-      params.push(sub_category_id);
-    }
-    if (brand_id) {
-      whereConditions.push("p.brand_id = ?");
-      params.push(brand_id);
-    }
     if (search) {
-      whereConditions.push("(p.name LIKE ? OR p.slug LIKE ?)");
+      whereClauses.push("(name LIKE ? OR sku LIKE ?)");
       params.push(`%${search}%`, `%${search}%`);
     }
+    if (category_id) {
+      whereClauses.push("category_id = ?");
+      params.push(category_id);
+    }
+    if (brand_id) {
+      whereClauses.push("brand_id = ?");
+      params.push(brand_id);
+    }
+    if (status) {
+      whereClauses.push("status = ?");
+      params.push(status);
+    }
+    if (is_featured !== undefined) {
+      whereClauses.push("is_featured = ?");
+      params.push(is_featured);
+    }
+    if (is_front !== undefined) {
+      whereClauses.push("is_front = ?");
+      params.push(is_front);
+    }
 
-    const whereClause = `WHERE ${whereConditions.join(" AND ")}`;
+    const whereSQL = whereClauses.length
+      ? `WHERE ${whereClauses.join(" AND ")}`
+      : "";
 
     // Count total
-    const countQuery = `
-      SELECT COUNT(*) as total
-      FROM products p
-      LEFT JOIN categories c ON p.category_id = c.id
-      LEFT JOIN subcategory sc ON p.sub_category_id = sc.id
-      LEFT JOIN brands b ON p.brand_id = b.id  -- ✅ Consistent JOIN
-      ${whereClause}
-    `;
-    const [countResult] = await pool.query(countQuery, params);
-    const total = countResult[0].total;
+    const [countResult] = await pool.query(
+      `SELECT COUNT(*) as total FROM product ${whereSQL}`,
+      params,
+    );
+    const total = countResult[0]?.total || 0;
 
-    // Fetch data
-    const dataQuery = `
-      SELECT 
-        p.*,
-        c.name as category_name,
-        sc.name as subcategory_name,
-        b.name as brand_name,
-        (SELECT MIN(price) FROM product_items WHERE product_id = p.id AND is_available = TRUE) as min_price,
-        (SELECT MAX(price) FROM product_items WHERE product_id = p.id AND is_available = TRUE) as max_price,
-        EXISTS (SELECT 1 FROM product_items WHERE product_id = p.id AND available_stock > 0) as in_stock,
-        (SELECT image_url FROM product_images WHERE product_id = p.id ORDER BY sort_order LIMIT 1) as primary_image
-      FROM products p
-      LEFT JOIN categories c ON p.category_id = c.id
-      LEFT JOIN subcategory sc ON p.sub_category_id = sc.id
-      LEFT JOIN brands b ON p.brand_id = b.id  -- ✅ Consistent JOIN
-      ${whereClause}
-      ORDER BY p.created_at DESC
-      LIMIT ? OFFSET ?
-    `;
-    const dataParams = [...params, limit, offset];
-    const [rows] = await pool.query(dataQuery, dataParams);
+    // Fetch products
+    const [products] = await pool.query(
+      `SELECT * FROM product ${whereSQL} ORDER BY ${sort} LIMIT ? OFFSET ?`,
+      [...params, parseInt(limit), parseInt(offset)],
+    );
 
-    res.json({
+    // Fetch media for each product
+    for (let product of products) {
+      product.media = await getProductMedia(product.id);
+    }
+
+    res.status(200).json({
       success: true,
-      data: rows,
+      data: products,
       pagination: {
-        page,
-        limit,
         total,
+        page: parseInt(page),
+        limit: parseInt(limit),
         totalPages: Math.ceil(total / limit),
       },
     });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, message: "Server error" });
+    console.error("Error in getAllProducts:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
-//  GET single product by id or slug
+
+// GET /api/products/:identifier (id or slug)
 export const getProductByIdOrSlug = async (req, res) => {
-  const identifier = req.params.identifier;
   try {
-    let query = `
-   SELECT 
-    p.*,
-    b.name AS brand_name,
-    c.name AS category_name,
-    s.name AS subcategory_name,
-    (
-        SELECT image_url 
-        FROM product_images 
-        WHERE product_id = p.id 
-        ORDER BY sort_order ASC 
-        LIMIT 1
-    ) AS primary_image_url
-FROM products p
-LEFT JOIN brands b ON p.brand_id = b.id
-LEFT JOIN categories c ON p.category_id = c.id
-LEFT JOIN subcategory s ON p.sub_category_id = s.id
-WHERE p.id = ? OR p.slug = ?;
-    
-    
-    `;
-    const [rows] = await pool.query(query, [identifier, identifier]);
+    const { identifier } = req.params;
+    const isNumeric = !isNaN(identifier);
+
+    const field = isNumeric ? "id" : "slug";
+    const [rows] = await pool.query(
+      `SELECT * FROM product WHERE ${field} = ?`,
+      [identifier],
+    );
+
     if (rows.length === 0) {
       return res
         .status(404)
         .json({ success: false, message: "Product not found" });
     }
-    res.json({ success: true, data: rows[0] });
+
+    const product = rows[0];
+    product.media = await getProductMedia(product.id);
+
+    res.status(200).json({ success: true, data: product });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, message: "Server error" });
+    console.error("Error in getProductByIdOrSlug:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
+// controllers/productController.js
 
-//  CREATE product
+// ------------------- CREATE PRODUCT -------------------
 export const createProduct = async (req, res) => {
-  const {
-    category_id,
-    sub_category_id,
-    brand_id,
-    name,
-    short_description,
-    long_description,
-    seo_title,
-    seo_description,
-    seo_keywords,
-    status,
-  } = req.body;
-
-  // Validation
-  if (!category_id || !sub_category_id || !brand_id || !name) {
-    return res.status(400).json({
-      success: false,
-      message:
-        "Missing required fields (category_id, sub_category_id, brand_id, name)",
-    });
-  }
-
+  const connection = await pool.getConnection();
   try {
-    // Verify foreign keys exist
-    const [cat] = await pool.query("SELECT id FROM categories WHERE id = ?", [
+    await connection.beginTransaction();
+
+    const {
       category_id,
-    ]);
-    if (cat.length === 0)
-      return res
-        .status(400)
-        .json({ success: false, message: "Invalid category_id" });
+      sub_category_id,
+      brand_id = null,
+      name,
+      short_description,
+      long_description,
+      seo_title,
+      seo_description,
+      seo_keywords,
+      sku,
+      price,
+      weight,
+      width,
+      height,
+      depth,
+      is_available,
+      is_featured,
+      is_front,
+      available_stock,
+      active,
+      vehicle_generation_ids = [], // 👈 add this
+    } = req.body;
 
-    const [subcat] = await pool.query(
-      "SELECT id FROM subcategory WHERE id = ?",
-      [sub_category_id],
-    );
-    if (subcat.length === 0)
-      return res
-        .status(400)
-        .json({ success: false, message: "Invalid sub_category_id" });
+    // Validate required
+    if (!category_id || !sub_category_id || !name || !sku) {
+      await connection.rollback();
+      return res.status(400).json({
+        success: false,
+        message:
+          "category_id, sub_category_id, brand_id, name, and sku are required",
+      });
+    }
 
-    const [brand] = await pool.query("SELECT id FROM brands WHERE id = ?", [
-      brand_id,
-    ]);
-    if (brand.length === 0)
-      return res
-        .status(400)
-        .json({ success: false, message: "Invalid brand_id" });
-
-    // Generate unique slug
+    // Slug
     let slug = generateSlug(name);
     slug = await makeSlugUnique(slug);
 
-    const [result] = await pool.query(
-      `INSERT INTO products 
-            (category_id, sub_category_id, brand_id, name, slug, short_description, long_description, 
-             seo_title, seo_description, seo_keywords, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    // Insert product
+    const [result] = await connection.query(
+      `INSERT INTO product (
+    category_id, sub_category_id, brand_id, name, slug,
+    short_description, long_description, seo_title, seo_description, seo_keywords,
+    sku, price, weight, width, height, depth,
+    is_available, is_featured, is_front, available_stock,
+    status, product_created_at, product_updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+      [
+        category_id,
+        sub_category_id,
+        brand_id || null,
+        name,
+        slug,
+        short_description || null,
+        long_description || null,
+        seo_title || null,
+        seo_description || null,
+        seo_keywords || null,
+        sku,
+        price || 0,
+        weight || null,
+        width || null,
+        height || null,
+        depth || null,
+        is_available !== undefined ? is_available : 1,
+        is_featured !== undefined ? is_featured : 1,
+        is_front !== undefined ? is_front : 1,
+        available_stock || 0,
+        active || "active",
+      ],
+    );
+
+    const productId = result.insertId;
+
+    // ---------- HANDLE MEDIA (skip empty files) ----------
+    const product_media = req.files?.map((el) => [
+      productId,
+      el.path,
+      el.filename,
+      0,
+      "active",
+    ]);
+    // Insert media
+
+    if (product_media.length > 0) {
+      await connection.query(
+        `INSERT INTO product_media
+    (product_id, image_url, image_url_id, sort_order, status)
+    VALUES ?`,
+        [product_media],
+      );
+    }
+    console.log(vehicle_generation_ids);
+
+    // ---------- HANDLE VEHICLE COMPATIBILITY ----------
+    if (
+      Array.isArray(vehicle_generation_ids) &&
+      vehicle_generation_ids.length > 0
+    ) {
+      const uniqueIds = [...new Set(vehicle_generation_ids)];
+
+      // Validate all generation ids exist
+      const placeholders = uniqueIds.map(() => "?").join(",");
+
+      const [generations] = await connection.query(
+        `SELECT id
+     FROM vehicle_generations
+     WHERE id IN (${placeholders})`,
+        uniqueIds,
+      );
+
+      if (generations.length !== uniqueIds.length) {
+        await connection.rollback();
+
+        const foundIds = generations.map((g) => g.id);
+
+        const invalidIds = uniqueIds.filter((id) => !foundIds.includes(id));
+
+        if (invalidIds.length) {
+          await connection.rollback();
+
+          return res.status(400).json({
+            success: false,
+            message: `Invalid vehicle generation IDs: ${invalidIds.join(", ")}`,
+          });
+        }
+      }
+
+      const compatibilityValues = uniqueIds.map((generationId) => [
+        productId,
+        generationId,
+        null,
+      ]);
+
+      await connection.query(
+        `INSERT INTO product_vehicle_compatibility
+      (product_id, vehicle_generation_id, compatibility_notes)
+      VALUES ?`,
+        [compatibilityValues],
+      );
+    }
+
+    await connection.commit();
+    // Fetch complete product with media
+    const [productRows] = await pool.query(
+      "SELECT * FROM product WHERE id = ?",
+      [productId],
+    );
+    const product = productRows[0];
+    product.media = await getProductMedia(productId);
+
+    const [compatibility] = await pool.query(
+      `SELECT
+              pvc.id,
+              pvc.compatibility_notes,
+              vg.id AS vehicle_generation_id,
+              vg.year_from,
+              vg.year_to,
+              vm.name AS model_name,
+              mk.name AS make_name
+          FROM product_vehicle_compatibility pvc
+          JOIN vehicle_generations vg
+              ON pvc.vehicle_generation_id = vg.id
+          JOIN vehicle_models vm
+              ON vg.model_id = vm.id
+          JOIN vehicle_makes mk
+              ON vm.make_id = mk.id
+          WHERE pvc.product_id = ?
+          ORDER BY mk.name, vm.name, vg.year_from`,
+      [productId],
+    );
+
+    product.compatibility = compatibility;
+
+    res.status(201).json({ success: true, data: product });
+  } catch (error) {
+    await connection.rollback();
+    console.error("Error in createProduct:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  } finally {
+    connection.release();
+  }
+};
+
+// ------------------- UPDATE PRODUCT -------------------
+export const updateProduct = async (req, res) => {
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    const { id } = req.params;
+    const {
+      category_id,
+      sub_category_id,
+      brand_id,
+      name,
+      short_description,
+      long_description,
+      seo_title,
+      seo_description,
+      seo_keywords,
+      sku,
+      price,
+      weight,
+      width,
+      height,
+      depth,
+      is_available,
+      is_featured,
+      is_front,
+      available_stock,
+      status,
+      vehicle_generation_ids,
+    } = req.body;
+
+    // Check existence
+    const [existing] = await connection.query(
+      "SELECT * FROM product WHERE id = ?",
+      [id],
+    );
+    if (existing.length === 0) {
+      await connection.rollback();
+      return res
+        .status(404)
+        .json({ success: false, message: "Product not found" });
+    }
+    const productId = existing[0].id;
+    // Generate slug only if name changed
+    let slug = existing[0].slug;
+    if (name && name !== existing[0].name) {
+      slug = generateSlug(name);
+      slug = await makeSlugUnique(slug, id);
+    }
+
+    const now = new Date();
+
+    // ---------- CORRECTED UPDATE ----------
+    await connection.query(
+      `UPDATE product SET
+        category_id = ?,
+        sub_category_id = ?,
+        brand_id = ?,
+        name = ?,
+        slug = ?,
+        short_description = ?,
+        long_description = ?,
+        seo_title = ?,
+        seo_description = ?,
+        seo_keywords = ?,
+        sku = ?,
+        price = ?,
+        weight = ?,
+        width = ?,
+        height = ?,
+        depth = ?,
+        is_available = ?,
+        is_featured = ?,
+        is_front = ?,
+        available_stock = ?,
+        status = ?,
+        product_updated_at = ?
+      WHERE id = ?`,
       [
         category_id,
         sub_category_id,
@@ -348,40 +435,211 @@ export const createProduct = async (req, res) => {
         seo_title || null,
         seo_description || null,
         seo_keywords || null,
+        sku,
+        price || 0,
+        weight || null,
+        width || null,
+        height || null,
+        depth || null,
+        is_available !== undefined ? is_available : 1,
+        is_featured !== undefined ? is_featured : 1,
+        is_front !== undefined ? is_front : 1,
+        available_stock || 0,
         status || "active",
+        now, // only one timestamp
+        id,
       ],
     );
+    // Add Images If Sent
+    let product_media;
 
-    const [newProduct] = await pool.query(
-      "SELECT * FROM products WHERE id = ?",
-      [result.insertId],
+    if (req.files && req.files.length > 0) {
+      product_media = req.files?.map((el) => [
+        productId,
+        el.path,
+        el.filename,
+        0,
+        "active",
+      ]);
+      // Insert media
+
+      await connection.query(
+        `INSERT INTO product_media (product_id, image_url, image_url_id, sort_order, status) VALUES ?`,
+        [product_media],
+      );
+    }
+
+    // ---------- UPDATE VEHICLE COMPATIBILITY ----------
+
+    // Remove existing compatibility
+    //   await connection.query(
+    //     `DELETE FROM product_vehicle_compatibility
+    //  WHERE product_id = ?`,
+    //     [productId],
+    //   );
+
+    if (
+      Array.isArray(vehicle_generation_ids) &&
+      vehicle_generation_ids.length > 0
+    ) {
+      const uniqueIds = [...new Set(vehicle_generation_ids)];
+
+      const placeholders = uniqueIds.map(() => "?").join(",");
+
+      // Validate IDs
+      const [generations] = await connection.query(
+        `SELECT id
+     FROM vehicle_generations
+     WHERE id IN (${placeholders})`,
+        uniqueIds,
+      );
+
+      if (generations.length !== uniqueIds.length) {
+        const foundIds = generations.map((g) => g.id);
+
+        const invalidIds = uniqueIds.filter((id) => !foundIds.includes(id));
+
+        await connection.rollback();
+
+        return res.status(400).json({
+          success: false,
+          message: `Invalid vehicle generation IDs: ${invalidIds.join(", ")}`,
+        });
+      }
+
+      const compatibilityValues = uniqueIds.map((generationId) => [
+        productId,
+        generationId,
+        null,
+      ]);
+
+      await connection.query(
+        `INSERT INTO product_vehicle_compatibility
+      (product_id, vehicle_generation_id, compatibility_notes)
+      VALUES ?`,
+        [compatibilityValues],
+      );
+    }
+
+    await connection.commit();
+
+    // Fetch updated product
+    const [productRows] = await connection.query(
+      "SELECT * FROM product WHERE id = ?",
+      [id],
     );
-    res.status(201).json({ success: true, data: newProduct[0] });
+
+    const [compatibility] = await pool.query(
+      `SELECT
+      pvc.id,
+      pvc.compatibility_notes,
+      vg.id AS vehicle_generation_id,
+      vg.year_from,
+      vg.year_to,
+      vm.name AS model_name,
+      mk.name AS make_name
+  FROM product_vehicle_compatibility pvc
+  JOIN vehicle_generations vg
+      ON pvc.vehicle_generation_id = vg.id
+  JOIN vehicle_models vm
+      ON vg.model_id = vm.id
+  JOIN vehicle_makes mk
+      ON vm.make_id = mk.id
+  WHERE pvc.product_id = ?
+  ORDER BY mk.name, vm.name, vg.year_from`,
+      [productId],
+    );
+
+    const product = productRows[0];
+    product.media = await getProductMedia(id);
+    product.compatibility = compatibility;
+    res.status(200).json({ success: true, data: product });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, message: "Database error" });
+    await connection.rollback();
+    console.error("Error in updateProduct:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  } finally {
+    connection.release();
   }
 };
 
-//  UPDATE product
-export const updateProduct = async (req, res) => {
-  const { id } = req.params;
-  const {
-    category_id,
-    sub_category_id,
-    brand_id,
-    name,
-    short_description,
-    long_description,
-    seo_title,
-    seo_description,
-    seo_keywords,
-    status,
-  } = req.body;
+// ------------------- OTHER CONTROLLERS (getAll, getById, delete, toggle) -------------------
+// ... keep the same as earlier
 
+export const deleteProduct = async (req, res) => {
+  const connection = await pool.getConnection();
   try {
+    await connection.beginTransaction();
+
+    const { id } = req.params;
+
+    // Check if exists
+    const [existing] = await connection.query(
+      "SELECT * FROM product WHERE id = ?",
+      [id],
+    );
+    if (existing.length === 0) {
+      await connection.rollback();
+      return res
+        .status(404)
+        .json({ success: false, message: "Product not found" });
+    }
+
+    // Get media to delete from Cloudinary (if you have a function)
+    const [mediaRows] = await connection.query(
+      "SELECT image_url_id FROM product_media WHERE product_id = ? AND image_url_id IS NOT NULL",
+      [id],
+    );
+
+    // (Optional) Delete images from Cloudinary using image_url_id
+    // You would call a Cloudinary destroy function here.
+
+    // Inside deleteProduct after fetching mediaRows
+    for (const row of mediaRows) {
+      if (row.image_url_id) {
+        try {
+          await cloudinary.uploader.destroy(row.image_url_id);
+        } catch (err) {
+          console.error(
+            `Failed to delete Cloudinary image ${row.image_url_id}:`,
+            err,
+          );
+        }
+      }
+    }
+
+    // Delete media (cascaded by FK, but we do it explicitly if needed)
+    await connection.query("DELETE FROM product_media WHERE product_id = ?", [
+      id,
+    ]);
+    // Delete product
+    await connection.query("DELETE FROM product WHERE id = ?", [id]);
+
+    await connection.commit();
+
+    res.status(200).json({
+      success: true,
+      message: "Product deleted successfully",
+      deletedCloudinaryIds: mediaRows
+        .map((row) => row.image_url_id)
+        .filter(Boolean),
+    });
+  } catch (error) {
+    await connection.rollback();
+    console.error("Error in deleteProduct:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  } finally {
+    connection.release();
+  }
+};
+
+// PATCH /api/products/:id/toggle-status
+export const toggleProductStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+
     const [existing] = await pool.query(
-      "SELECT id, slug FROM products WHERE id = ?",
+      "SELECT id, status FROM product WHERE id = ?",
       [id],
     );
     if (existing.length === 0) {
@@ -390,130 +648,20 @@ export const updateProduct = async (req, res) => {
         .json({ success: false, message: "Product not found" });
     }
 
-    // Validate foreign keys if provided
-    if (category_id) {
-      const [cat] = await pool.query("SELECT id FROM categories WHERE id = ?", [
-        category_id,
-      ]);
-      if (cat.length === 0)
-        return res
-          .status(400)
-          .json({ success: false, message: "Invalid category_id" });
-    }
-    if (sub_category_id) {
-      const [subcat] = await pool.query(
-        "SELECT id FROM subcategory WHERE id = ?",
-        [sub_category_id],
-      );
-      if (subcat.length === 0)
-        return res
-          .status(400)
-          .json({ success: false, message: "Invalid sub_category_id" });
-    }
-    if (brand_id) {
-      const [brand] = await pool.query("SELECT id FROM brands WHERE id = ?", [
-        brand_id,
-      ]);
-      if (brand.length === 0)
-        return res
-          .status(400)
-          .json({ success: false, message: "Invalid brand_id" });
-    }
-
-    let slug = existing[0].slug;
-    if (name && name !== existing[0].name) {
-      let newSlug = generateSlug(name);
-      newSlug = await makeSlugUnique(newSlug, id);
-      slug = newSlug;
-    }
+    const newStatus = existing[0].status === "active" ? "inactive" : "active";
 
     await pool.query(
-      `UPDATE products SET
-                category_id = COALESCE(?, category_id),
-                sub_category_id = COALESCE(?, sub_category_id),
-                brand_id = COALESCE(?, brand_id),
-                name = COALESCE(?, name),
-                slug = ?,
-                short_description = COALESCE(?, short_description),
-                long_description = COALESCE(?, long_description),
-                seo_title = COALESCE(?, seo_title),
-                seo_description = COALESCE(?, seo_description),
-                seo_keywords = COALESCE(?, seo_keywords),
-                status = COALESCE(?, status)
-            WHERE id = ?`,
-      [
-        category_id,
-        sub_category_id,
-        brand_id,
-        name,
-        slug,
-        short_description,
-        long_description,
-        seo_title,
-        seo_description,
-        seo_keywords,
-        status,
-        id,
-      ],
+      "UPDATE product SET status = ?, product_updated_at = NOW() WHERE id = ?",
+      [newStatus, id],
     );
 
-    const [updated] = await pool.query("SELECT * FROM products WHERE id = ?", [
-      id,
-    ]);
-    res.json({ success: true, data: updated[0] });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, message: "Update error" });
-  }
-};
-
-//  DELETE product
-export const deleteProduct = async (req, res) => {
-  const { id } = req.params;
-  try {
-    const [result] = await pool.query("DELETE FROM products WHERE id = ?", [
-      id,
-    ]);
-    if (result.affectedRows === 0) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Product not found" });
-    }
-    res.json({ success: true, message: "Product deleted successfully" });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, message: "Server error" });
-  }
-};
-
-//  Toggle product status
-export const toggleProductStatus = async (req, res) => {
-  const { id } = req.params;
-  try {
-    const [rows] = await pool.query(
-      "SELECT status FROM products WHERE id = ?",
-      [id],
-    );
-    if (rows.length === 0) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Product not found" });
-    }
-    const newStatus = rows[0].status === "active" ? "inactive" : "active";
-    await pool.query("UPDATE products SET status = ? WHERE id = ?", [
-      newStatus,
-      id,
-    ]);
-    const [updated] = await pool.query("SELECT * FROM products WHERE id = ?", [
-      id,
-    ]);
-    res.json({
+    res.status(200).json({
       success: true,
       message: `Product status toggled to ${newStatus}`,
-      data: updated[0],
+      status: newStatus,
     });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, message: "Server error" });
+    console.error("Error in toggleProductStatus:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
   }
 };

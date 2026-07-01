@@ -257,7 +257,7 @@ export const toggleBrandStatus = async (req, res) => {
   }
 };
 
-// ✅ NEW: Get only active brands (convenience method for frontend dropdowns)
+// NEW: Get only active brands (convenience method for frontend dropdowns)
 export const getActiveBrands = async (req, res) => {
   try {
     const [rows] = await pool.query(

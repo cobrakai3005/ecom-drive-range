@@ -20,15 +20,37 @@ router.post(
   "/create_category",
   verifyToken,
   authorize("Admin", "Staff"),
-  upload.single("image_url"),
+  (req, res, next) => {
+    upload.single("image_url")(req, res, (err) => {
+      if (err) {
+        // Multer error (file size, type, etc.)
+        return res.status(400).json({ message: err.message });
+      }
+      next();
+    });
+  },
   categoryController.createCategory,
 );
 router.put(
   "/update_category/:id",
   verifyToken,
   authorize("Admin", "Staff"),
-  upload.single("image_url"),
+  (req, res, next) => {
+    upload.single("image_url")(req, res, (err) => {
+      if (err) {
+        // Multer error (file size, type, etc.)
+        return res.status(400).json({ message: err.message });
+      }
+      next();
+    });
+  },
   categoryController.updateCategory,
+);
+router.delete(
+  "/image/:id",
+  verifyToken,
+  authorize("Admin"),
+  categoryController.deleteCategoryImage,
 );
 router.delete(
   "/delete_category/:id",

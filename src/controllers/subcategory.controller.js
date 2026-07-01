@@ -19,7 +19,7 @@ export const getAllSubcategories = async (req, res) => {
     let whereConditions = [];
     let params = [];
 
-    whereConditions.push("status = ?");
+    whereConditions.push("s.status = ?");
     if (status && ["active", "inactive"].includes(status)) {
       params.push(status);
     } else {
@@ -27,10 +27,10 @@ export const getAllSubcategories = async (req, res) => {
     }
 
     if (category_id && !isNaN(category_id)) {
-      whereConditions.push("category_id = ?");
+      whereConditions.push("s.category_id = ?");
       params.push(category_id);
     }
-// Search (Multiple columns)
+    // Search (Multiple columns)
     if (search) {
       whereConditions.push("(s.name LIKE ? OR s.description LIKE ?)");
       params.push(`%${search}%`, `%${search}%`);
@@ -41,15 +41,23 @@ export const getAllSubcategories = async (req, res) => {
         : "";
 
     // Get total count
-    const countQuery = `SELECT COUNT(*) as total FROM subcategory s ${whereClause}`;
+    const countQuery = `
+      SELECT COUNT(*) as total 
+
+      FROM subcategory s ${whereClause}
+     
+     `;
     const [countResult] = await pool.query(countQuery, params);
     const total = countResult[0].total;
 
     // Get paginated data - ✅ Removed display_order
     const dataQuery = `
-            SELECT * FROM subcategory s 
+            SELECT s.*,
+             c.name as category_name
+            FROM subcategory s
+            JOIN categories c on c.id = s.category_id
             ${whereClause}
-            ORDER BY id ASC 
+            ORDER BY s.id ASC 
             LIMIT ? OFFSET ?
         `;
     const dataParams = [...params, limit, offset];
@@ -327,5 +335,63 @@ export const toggleSubcategoryStatus = async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+export const deleteSubcategoryImage = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    // Check if category exists
+    const [rows] = await pool.query(
+      "SELECT image_url FROM subcategory WHERE id = ?",
+      [id],
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({
+        success: false,
+        message: "Subategory not found",
+      });
+    }
+
+    const imageUrl = rows[0].image_url;
+
+    // Delete image from Cloudinary if exists
+    if (imageUrl) {
+      try {
+        // Extract public_id from Cloudinary URL
+        const parts = imageUrl.split("/");
+        const fileName = parts.pop().split(".")[0];
+        const folder = parts.slice(parts.indexOf("upload") + 2).join("/");
+        const publicId = folder ? `${folder}/${fileName}` : fileName;
+
+        await cloudinary.uploader.destroy(publicId);
+      } catch (err) {
+        console.error("Cloudinary delete failed:", err);
+      }
+    }
+
+    // Remove image URL from database
+    await pool.query("UPDATE subcategory SET image_url = NULL WHERE id = ?", [
+      id,
+    ]);
+
+    const [updated] = await pool.query(
+      "SELECT * FROM subcategory WHERE id = ?",
+      [id],
+    );
+
+    res.json({
+      success: true,
+      message: "Subcategory image deleted successfully",
+      data: updated[0],
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      message: "Database error",
+    });
   }
 };

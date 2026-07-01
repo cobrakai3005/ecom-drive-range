@@ -159,19 +159,20 @@ export const updateCategory = async (req, res) => {
     }
 
     const { name, description, status, is_front } = req.body; // Removed display_order
-    let image_url = existing[0].image_url; // keep old by default
+    let image_url = existing[0]?.image_url; // keep old by default
 
     // If new file uploaded, use its URL
-    if (req.file) {
-      image_url = req.file.path;
+    if (req.file && image_url) {
       // Optional: delete old image from Cloudinary to save space
-      const publicId = existing[0].image_url
+      const publicId = existing[0]?.image_url
         .split("/")
         .slice(-2)
         .join("/")
         .split(".")[0];
       await cloudinary.uploader.destroy(publicId);
     }
+
+    image_url = req.file.path;
 
     // ✅ Fixed: Explicitly convert is_front to 1 or 0
     const isFrontValue =
@@ -308,5 +309,63 @@ export const toggleCategoryStatus = async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+export const deleteCategoryImage = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    // Check if category exists
+    const [rows] = await pool.query(
+      "SELECT image_url FROM categories WHERE id = ?",
+      [id],
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({
+        success: false,
+        message: "Category not found",
+      });
+    }
+
+    const imageUrl = rows[0].image_url;
+
+    // Delete image from Cloudinary if exists
+    if (imageUrl) {
+      try {
+        // Extract public_id from Cloudinary URL
+        const parts = imageUrl.split("/");
+        const fileName = parts.pop().split(".")[0];
+        const folder = parts.slice(parts.indexOf("upload") + 2).join("/");
+        const publicId = folder ? `${folder}/${fileName}` : fileName;
+
+        await cloudinary.uploader.destroy(publicId);
+      } catch (err) {
+        console.error("Cloudinary delete failed:", err);
+      }
+    }
+
+    // Remove image URL from database
+    await pool.query("UPDATE categories SET image_url = NULL WHERE id = ?", [
+      id,
+    ]);
+
+    const [updated] = await pool.query(
+      "SELECT * FROM categories WHERE id = ?",
+      [id],
+    );
+
+    res.json({
+      success: true,
+      message: "Category image deleted successfully",
+      data: updated[0],
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      message: "Database error",
+    });
   }
 };

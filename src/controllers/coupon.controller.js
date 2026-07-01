@@ -16,20 +16,21 @@ export const createCouponTemplate = async (req, res) => {
     discount_value,
     min_order_amount,
     max_discount_amount,
-    usage_limit_per_user,
     total_usage_limit,
     valid_from,
     valid_to,
     description,
-    custom_code,
+    code,
   } = req.body;
-  if (!discount_type || !discount_value || !valid_from || !valid_to) {
+  if (!discount_type || !discount_value || !valid_from || !valid_to || !code) {
     return res
       .status(400)
       .json({ success: false, message: "Missing required fields" });
   }
   try {
-    const code = custom_code || generateCouponCode();
+    const validFrom = new Date(valid_from);
+    const validTo = new Date(valid_to);
+    
     const [result] = await pool.query(
       `INSERT INTO coupons 
              (code, discount_type, discount_value, min_order_amount, max_discount_amount, 
@@ -41,10 +42,10 @@ export const createCouponTemplate = async (req, res) => {
         discount_value,
         min_order_amount || 0,
         max_discount_amount || null,
-        usage_limit_per_user || 1,
+        1,
         total_usage_limit || null,
-        valid_from,
-        valid_to,
+        validFrom,
+        validTo,
         description || null,
         req.user.id,
       ],
@@ -66,6 +67,122 @@ export const createCouponTemplate = async (req, res) => {
     res
       .status(500)
       .json({ success: false, message: "Failed to create coupon" });
+  }
+};
+
+export const updateCouponTemplate = async (req, res) => {
+  const { id } = req.params;
+
+  const {
+    discount_type,
+    discount_value,
+    min_order_amount,
+    max_discount_amount,
+    total_usage_limit,
+    valid_from,
+    valid_to,
+    description,
+    code,
+    
+  } = req.body;
+
+  if (!discount_type || !discount_value || !valid_from || !valid_to) {
+    return res.status(400).json({
+      success: false,
+      message: "Missing required fields",
+    });
+  }
+
+  try {
+    // Check coupon exists
+    const [[existingCoupon]] = await pool.query(
+      "SELECT * FROM coupons WHERE id = ?",
+      [id],
+    );
+
+    if (!existingCoupon) {
+      return res.status(404).json({
+        success: false,
+        message: "Coupon not found",
+      });
+    }
+
+    // Prevent duplicate code
+    if (code) {
+      const [[duplicate]] = await pool.query(
+        "SELECT id FROM coupons WHERE code = ? AND id != ?",
+        [code, id],
+      );
+
+      if (duplicate) {
+        return res.status(400).json({
+          success: false,
+          message: "Coupon code already exists",
+        });
+      }
+    }
+
+    const validFrom = new Date(valid_from);
+    const validTo = new Date(valid_to);
+
+    await pool.query(
+      `UPDATE coupons
+       SET
+         code = ?,
+         discount_type = ?,
+         discount_value = ?,
+         min_order_amount = ?,
+         max_discount_amount = ?,
+         total_usage_limit = ?,
+         valid_from = ?,
+         valid_to = ?,
+         description = ?
+       WHERE id = ?`,
+      [
+        code || existingCoupon.code,
+        discount_type,
+        discount_value,
+        min_order_amount || 0,
+        max_discount_amount || null,
+        total_usage_limit || null,
+        validFrom,
+        validTo,
+        description || null,
+        id,
+      ],
+    );
+
+    await logAudit({
+      userId: req.user.id,
+      action: "UPDATE_COUPON_TEMPLATE",
+      tableName: "coupons",
+      recordId: id,
+      oldData: existingCoupon,
+      newData: {
+        ...existingCoupon,
+        code: code || existingCoupon.code,
+        discount_type,
+        discount_value,
+        min_order_amount: min_order_amount || 0,
+        max_discount_amount: max_discount_amount || null,
+        total_usage_limit: total_usage_limit || null,
+        valid_from: validFrom,
+        valid_to: validTo,
+        description: description || null,
+      },
+      req,
+    });
+
+    res.json({
+      success: true,
+      message: "Coupon updated successfully",
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update coupon",
+    });
   }
 };
 

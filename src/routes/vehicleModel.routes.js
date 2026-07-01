@@ -21,14 +21,31 @@ router.post(
   verifyToken,
   authorize("Admin"),
 
-  upload.single("model_image_url"),
+  (req, res, next) => {
+    upload.single("model_image_url")(req, res, (err) => {
+      if (err) {
+        // Multer error (file size, type, etc.)
+        return res.status(400).json({ message: err.message });
+      }
+      next();
+    });
+  },
   createModel,
 );
 router.put(
   "/update_model/:id",
   verifyToken,
   authorize("Admin"),
-  upload.single("model_image_url"),
+
+  (req, res, next) => {
+    upload.single("model_image_url")(req, res, (err) => {
+      if (err) {
+        // Multer error (file size, type, etc.)
+        return res.status(400).json({ message: err.message });
+      }
+      next();
+    });
+  },
   updateModel,
 );
 router.delete(

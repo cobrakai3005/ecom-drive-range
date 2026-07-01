@@ -35,7 +35,7 @@ const upload = multer({
       return cb(null, true);
     }
 
-    return cb(new Error("Only images and mp4 videos allowed"));
+    return cb(new Error("Only png , jpeg , and jpg  images  are allowed"));
   },
 });
 export default upload;

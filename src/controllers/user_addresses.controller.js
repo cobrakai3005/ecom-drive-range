@@ -7,70 +7,90 @@ const checkOwnership = async (addressId, userId) => {
   );
   return rows.length > 0 && rows[0].user_id === userId;
 };
+
 export const getAllAddresses = async (req, res) => {
   try {
     const { role, id: userId } = req.user;
-    const { page = 1, limit = 10, search = "", type = "" } = req.query;
 
-    const offset = (parseInt(page) - 1) * parseInt(limit);
-    const searchTerm = `%${search}%`;
+    // Parse query parameters with defaults
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const search = req.query.search || "";
+    const type = req.query.type || ""; // 'billing', 'shipping', 'returns'
+    const status = req.query.status || "active"; // 'active', 'deleted', 'all'
+    const offset = (page - 1) * limit;
 
-    let baseQuery = `
-      FROM user_addresses
-      WHERE is_deleted = FALSE
-    `;
     const params = [];
+    const whereConditions = [];
 
-    // Role-based filter
+    // 1. Base condition (soft delete) – controlled by status
+    if (status === "active") {
+      whereConditions.push("is_deleted = 0");
+    } else if (status === "inactive") {
+      whereConditions.push("is_deleted = 1");
+    }
+    // if status === 'all', we add no condition on is_deleted
+
+    // 2. Role‑based filter (customer sees only own addresses)
     if (role === "Customer") {
-      baseQuery += " AND user_id = ?";
+      whereConditions.push("user_id = ?");
       params.push(userId);
     }
 
-    // Search filter (multiple columns)
-    if (search) {
-      baseQuery += ` AND (
-        full_name LIKE ? OR phone LIKE ? OR line1 LIKE ? OR 
-        city LIKE ? OR state LIKE ? OR postal_code LIKE ? OR landmark LIKE ?
-      )`;
-      for (let i = 0; i < 7; i++) params.push(searchTerm);
+    // 3. Search filter (multiple columns)
+    if (search.trim() !== "") {
+      const likeTerm = `%${search.trim()}%`;
+      whereConditions.push(
+        `(full_name LIKE ? OR phone LIKE ? OR line1 LIKE ? OR city LIKE ? OR state LIKE ? OR postal_code LIKE ? OR landmark LIKE ?)`,
+      );
+      // Push the same term for each column (7 times)
+      for (let i = 0; i < 7; i++) params.push(likeTerm);
     }
 
-    // Address type filter
+    // 4. Address type filter
     if (type && ["billing", "shipping", "returns"].includes(type)) {
-      baseQuery += " AND address_type = ?";
+      whereConditions.push("address_type = ?");
       params.push(type);
     }
 
-    // Count total matching records
-    const countQuery = `SELECT COUNT(*) as total ${baseQuery}`;
+    // Build the WHERE clause
+    const whereClause =
+      whereConditions.length > 0
+        ? `WHERE ${whereConditions.join(" AND ")}`
+        : "";
+
+    // 5. Count total matching records
+    const countQuery = `SELECT COUNT(*) as total FROM user_addresses ${whereClause}`;
     const [countResult] = await pool.query(countQuery, params);
     const total = countResult[0].total;
 
-    // Fetch paginated data
+    // 6. Fetch paginated data
     const dataQuery = `
-      SELECT * ${baseQuery}
+      SELECT * FROM user_addresses
+      ${whereClause}
       ORDER BY is_default DESC, created_at DESC
       LIMIT ? OFFSET ?
     `;
-    const dataParams = [...params, parseInt(limit), offset];
+    const dataParams = [...params, limit, offset];
     const [rows] = await pool.query(dataQuery, dataParams);
 
+    // 7. Send response
     res.json({
       success: true,
       data: rows,
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
+        page,
+        limit,
         total,
-        totalPages: Math.ceil(total / parseInt(limit)),
+        totalPages: Math.ceil(total / limit),
       },
     });
   } catch (error) {
-    console.error(error);
+    console.error("Error in getAllAddresses:", error);
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
+
 export const getAddressById = async (req, res) => {
   try {
     const { addressId } = req.params;
@@ -119,7 +139,7 @@ export const createAddress = async (req, res) => {
       }
       // Optionally check that user exists
       const [userExists] = await pool.query(
-        "SELECT id FROM users WHERE user_id = ?",
+        "SELECT id FROM users WHERE id = ?",
         [user_id],
       );
       if (userExists.length === 0) {
@@ -213,8 +233,6 @@ export const createAddress = async (req, res) => {
 };
 export const updateAddress = async (req, res) => {
   try {
-    console.log("reached******************************");
-
     const { addressId } = req.params;
     const { role, id: userId } = req.user;
 
@@ -287,31 +305,86 @@ export const updateAddress = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error update" });
   }
 };
+// export const deleteAddress = async (req, res) => {
+//   try {
+//     const { addressId } = req.params;
+//     const { role, id: userId } = req.user;
+
+//     const [existing] = await pool.query(
+//       "SELECT user_id FROM user_addresses WHERE id = ? AND is_deleted = FALSE",
+//       [addressId],
+//     );
+//     console.log(existing);
+
+//     if (existing.length === 0) {
+//       return res
+//         .status(404)
+//         .json({ success: false, message: "Address not found" });
+//     }
+//     if (role === "Customer" && existing[0].user_id !== userId) {
+//       return res.status(403).json({ success: false, message: "Forbidden" });
+//     }
+
+//     await pool.query(
+//       "UPDATE user_addresses SET is_deleted = TRUE WHERE id = ?",
+//       [addressId],
+//     );
+//     res.json({ success: true, message: "Address deleted" });
+//   } catch (error) {
+//     res.status(500).json({ success: false, message: "Server error" });
+//   }
+// };
 export const deleteAddress = async (req, res) => {
   try {
     const { addressId } = req.params;
     const { role, id: userId } = req.user;
 
+    // 1. Find the address (no filter on is_deleted)
     const [existing] = await pool.query(
-      "SELECT user_id FROM user_addresses WHERE id = ? AND is_deleted = FALSE",
+      "SELECT id, user_id, is_deleted FROM user_addresses WHERE id = ?",
       [addressId],
     );
+
     if (existing.length === 0) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Address not found" });
-    }
-    if (role === "Customer" && existing[0].user_id !== userId) {
-      return res.status(403).json({ success: false, message: "Forbidden" });
+      return res.status(404).json({
+        success: false,
+        message: "Address not found",
+      });
     }
 
-    await pool.query(
-      "UPDATE user_addresses SET is_deleted = TRUE WHERE id = ?",
-      [addressId],
-    );
-    res.json({ success: true, message: "Address deleted" });
+    const address = existing[0];
+
+    // 2. Permission check: Customers can only toggle their own addresses
+    if (role === "Customer" && address.user_id !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: "Forbidden",
+      });
+    }
+
+    // 3. Toggle is_deleted
+    const newDeletedStatus = address.is_deleted ? 0 : 1; // flip the bit
+    await pool.query("UPDATE user_addresses SET is_deleted = ? WHERE id = ?", [
+      newDeletedStatus,
+      addressId,
+    ]);
+
+    // 4. Build response message
+    const message = newDeletedStatus
+      ? "Address deleted (soft)"
+      : "Address restored";
+
+    res.json({
+      success: true,
+      message,
+      is_deleted: !!newDeletedStatus, // boolean for frontend convenience
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: "Server error" });
+    console.error("Error in deleteAddress (toggle):", error);
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
   }
 };
 export const deleveryAddress = async (req, res) => {};

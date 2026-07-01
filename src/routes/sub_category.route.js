@@ -20,15 +20,38 @@ router.post(
   "/create_subcategory",
   verifyToken,
   authorize("Admin", "Staff"),
-  upload.single("image_url"),
+  (req, res, next) => {
+    upload.single("image_url")(req, res, (err) => {
+      if (err) {
+        // Multer error (file size, type, etc.)
+        return res.status(400).json({ message: err.message });
+      }
+      next();
+    });
+  },
   subcategoryController.createSubcategory,
 );
 router.put(
   "/update_subcategory/:id",
   verifyToken,
   authorize("Admin", "Staff"),
-  upload.single("image_url"),
+  (req, res, next) => {
+    upload.single("image_url")(req, res, (err) => {
+      if (err) {
+        // Multer error (file size, type, etc.)
+        return res.status(400).json({ message: err.message });
+      }
+      next();
+    });
+  },
   subcategoryController.updateSubcategory,
+);
+
+router.delete(
+  "/image/:id",
+  verifyToken,
+  authorize("Admin"),
+  subcategoryController.deleteSubcategoryImage,
 );
 router.delete(
   "/delete_subcategory/:id",

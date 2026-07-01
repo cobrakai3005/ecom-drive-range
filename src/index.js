@@ -40,7 +40,7 @@ import orderRoutes from "./routes/order.route.js";
 import vehicleMakeRoutes from "./routes/vehicleMake.routes.js";
 import vehicleModelRoutes from "./routes/vehicleModel.routes.js";
 import vehicleGenerationRoutes from "./routes/vehicleGeneration.routes.js";
-// import shipmentsRoutes from "./routes/shipments.route.js";
+import shipmentsRoutes from "./routes/shipments.route.js";
 
 import paymentMothodsRoutes from "./routes/payment_method.route.js";
 import transactionsRoutes from "./routes/transactions.route.js";
@@ -50,6 +50,7 @@ import warrantyRoutes from "./routes/warranty.routes.js";
 import auditLogRoutes from "./routes/auditLog.routes.js";
 import reviewsRoutes from "./routes/reviews.routes.js";
 import vehicleCompatibilty from "./routes/vehicleCompatibility.routes.js";
+import websiteReviews from "./routes/website_review.route.js";
 //Routes Defined
 
 app.use("/api/auth", authRoutes);
@@ -78,7 +79,8 @@ app.use("/api/vehicle-makes", vehicleMakeRoutes);
 app.use("/api/vehicle-models", vehicleModelRoutes);
 app.use("/api/vehicle-generations", vehicleGenerationRoutes);
 app.use("/api/vehicle-compatibility", vehicleCompatibilty);
-// app.use("/api/shipments", shipmentsRoutes);
+app.use("/api/shipments", shipmentsRoutes);
+app.use("/api/website-reviews", websiteReviews);
 
 app.listen(port, async () => {
   await connect();

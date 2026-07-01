@@ -2,34 +2,53 @@ import { pool } from "../config/db.js";
 import { logAudit } from "../lib/auditLog.js";
 
 // ========== GET generations (filter by model_id, year, pagination) ==========
+
 export const getAllGenerations = async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const offset = (page - 1) * limit;
     const model_id = req.query.model_id;
-    const year = req.query.year; // filter where year_from <= year <= year_to
+    const year = req.query.year;
+    const status = req.query.status; // 'active' or 'inactive'
+    const search = req.query.search; // free text search
 
     let whereClause = "1=1";
     let params = [];
+
     if (model_id) {
       whereClause += " AND g.model_id = ?";
       params.push(model_id);
     }
     if (year) {
-      whereClause += " AND g.year_from <= ? AND (g.year_to >= ? OR g.year_to IS NULL)";
+      whereClause +=
+        " AND g.year_from <= ? AND (g.year_to >= ? OR g.year_to IS NULL)";
       params.push(year, year);
     }
+    if (status) {
+      whereClause += " AND g.status = ?";
+      params.push(status);
+    }
+    if (search) {
+      whereClause +=
+        " AND (g.generation_name LIKE ? OR m.name LIKE ? OR mk.name LIKE ?)";
+      const like = `%${search}%`;
+      params.push(like, like, like);
+    }
 
+    // Count query – now includes joins because search may need them
     const countQuery = `
       SELECT COUNT(*) as total 
       FROM vehicle_generations g
+      JOIN vehicle_models m ON g.model_id = m.id
+      JOIN vehicle_makes mk ON m.make_id = mk.id
       WHERE ${whereClause}
     `;
     const [countResult] = await pool.query(countQuery, params);
     const totalItems = countResult[0].total;
     const totalPages = Math.ceil(totalItems / limit);
 
+    // Data query
     const dataQuery = `
       SELECT g.*, m.name as model_name, mk.name as make_name
       FROM vehicle_generations g
@@ -61,6 +80,44 @@ export const getAllGenerations = async (req, res) => {
 };
 
 // ========== GET single generation by id ==========
+export const getAvailableVehicleGenerations = async (req, res) => {
+  try {
+    const { productId } = req.params;
+
+    const [rows] = await pool.query(
+      `SELECT
+          vg.id,
+          vg.year_from,
+          vg.year_to,
+          vm.name AS model_name,
+          mk.name AS make_name
+      FROM vehicle_generations vg
+      JOIN vehicle_models vm
+          ON vg.model_id = vm.id
+      JOIN vehicle_makes mk
+          ON vm.make_id = mk.id
+      WHERE NOT EXISTS (
+          SELECT 1
+          FROM product_vehicle_compatibility pvc
+          WHERE pvc.product_id = ?
+            AND pvc.vehicle_generation_id = vg.id
+      )
+      ORDER BY mk.name, vm.name, vg.year_from`,
+      [productId],
+    );
+
+    res.json({
+      success: true,
+      data: rows,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  }
+};
 export const getGenerationById = async (req, res) => {
   const { id } = req.params;
   try {
@@ -70,7 +127,7 @@ export const getGenerationById = async (req, res) => {
        JOIN vehicle_models m ON g.model_id = m.id
        JOIN vehicle_makes mk ON m.make_id = mk.id
        WHERE g.id = ?`,
-      [id]
+      [id],
     );
     if (rows.length === 0) {
       return res
@@ -86,7 +143,14 @@ export const getGenerationById = async (req, res) => {
 
 // ========== CREATE generation ==========
 export const createGeneration = async (req, res) => {
-  const { model_id, generation_name, year_from, year_to, engine_options } = req.body;
+  const {
+    model_id,
+    generation_name,
+    year_from,
+    year_to,
+    engine_options,
+    status,
+  } = req.body;
   if (!model_id || !year_from) {
     return res.status(400).json({
       success: false,
@@ -100,7 +164,10 @@ export const createGeneration = async (req, res) => {
     });
   }
   try {
-    const [model] = await pool.query("SELECT id FROM vehicle_models WHERE id = ?", [model_id]);
+    const [model] = await pool.query(
+      "SELECT id FROM vehicle_models WHERE id = ?",
+      [model_id],
+    );
     if (model.length === 0) {
       return res
         .status(400)
@@ -108,13 +175,20 @@ export const createGeneration = async (req, res) => {
     }
     const [result] = await pool.query(
       `INSERT INTO vehicle_generations 
-       (model_id, generation_name, year_from, year_to, engine_options) 
-       VALUES (?, ?, ?, ?, ?)`,
-      [model_id, generation_name || null, year_from, year_to || null, engine_options || null]
+       (model_id, generation_name, year_from, year_to, engine_options, status) 
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        model_id,
+        generation_name || null,
+        year_from,
+        year_to || null,
+        engine_options || null,
+        status || "active",
+      ],
     );
     const [newGen] = await pool.query(
       "SELECT * FROM vehicle_generations WHERE id = ?",
-      [result.insertId]
+      [result.insertId],
     );
     await logAudit({
       userId: req.user.id,
@@ -135,11 +209,18 @@ export const createGeneration = async (req, res) => {
 // ========== UPDATE generation ==========
 export const updateGeneration = async (req, res) => {
   const { id } = req.params;
-  const { model_id, generation_name, year_from, year_to, engine_options } = req.body;
+  const {
+    model_id,
+    generation_name,
+    year_from,
+    year_to,
+    engine_options,
+    status,
+  } = req.body;
   try {
     const [existing] = await pool.query(
       "SELECT * FROM vehicle_generations WHERE id = ?",
-      [id]
+      [id],
     );
     if (existing.length === 0) {
       return res
@@ -147,7 +228,10 @@ export const updateGeneration = async (req, res) => {
         .json({ success: false, message: "Vehicle generation not found" });
     }
     if (model_id) {
-      const [model] = await pool.query("SELECT id FROM vehicle_models WHERE id = ?", [model_id]);
+      const [model] = await pool.query(
+        "SELECT id FROM vehicle_models WHERE id = ?",
+        [model_id],
+      );
       if (model.length === 0) {
         return res
           .status(400)
@@ -160,13 +244,22 @@ export const updateGeneration = async (req, res) => {
        generation_name = COALESCE(?, generation_name),
        year_from = COALESCE(?, year_from),
        year_to = COALESCE(?, year_to),
-       engine_options = COALESCE(?, engine_options)
+       engine_options = COALESCE(?, engine_options),
+       status = COALESCE(?, engine_options)
        WHERE id = ?`,
-      [model_id, generation_name, year_from, year_to, engine_options, id]
+      [
+        model_id,
+        generation_name,
+        year_from,
+        year_to,
+        engine_options,
+        status,
+        id,
+      ],
     );
     const [updated] = await pool.query(
       "SELECT * FROM vehicle_generations WHERE id = ?",
-      [id]
+      [id],
     );
     await logAudit({
       userId: req.user.id,
@@ -190,7 +283,7 @@ export const deleteGeneration = async (req, res) => {
   try {
     const [compat] = await pool.query(
       "SELECT id FROM product_vehicle_compatibility WHERE vehicle_generation_id = ? LIMIT 1",
-      [id]
+      [id],
     );
     if (compat.length > 0) {
       return res.status(400).json({
@@ -200,7 +293,7 @@ export const deleteGeneration = async (req, res) => {
     }
     const [existing] = await pool.query(
       "SELECT * FROM vehicle_generations WHERE id = ?",
-      [id]
+      [id],
     );
     if (existing.length === 0) {
       return res
