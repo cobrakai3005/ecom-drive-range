@@ -161,7 +161,7 @@ export const updateCategory = async (req, res) => {
     const { name, description, status, is_front } = req.body; // Removed display_order
     let image_url = existing[0]?.image_url; // keep old by default
 
-    console.log("Existing image_url:", image_url);
+   
 
     // If new file uploaded, use its URL
     if (req.file) {

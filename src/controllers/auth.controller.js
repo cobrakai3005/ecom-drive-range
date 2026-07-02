@@ -5,8 +5,8 @@ import cloudinary from "../config/cloudinary.js";
 import { sendOTPEmail } from "../services/nodemailer.service.js";
 const fiveMinutes = 5 * 60 * 1000;
 
-export const testController = (req, res) => {
-  return res.json("Test Controller");
+export const getMe = (req, res) => {
+  return res.json(req.user);
 };
 export const registerController = async (req, res) => {
   try {
@@ -105,7 +105,7 @@ export const login = async (req, res) => {
     if (userRows.length === 0) {
       return res.status(404).json({
         success: false,
-        message: "User not found",
+        message: "Inavalid Credentials",
       });
     }
 

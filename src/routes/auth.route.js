@@ -1,6 +1,6 @@
 import express from "express";
 import {
-  testController,
+
   registerController as register,
   login,
   logout,
@@ -8,12 +8,14 @@ import {
   verifyOTP,
   updateProfileImage,
   forgetPassword,
+  getMe,
 } from "../controllers/auth.controller.js";
 import upload from "../middlewares/multer.middleware.js";
 import verifyToken from "../middlewares/auth.middleware.js";
 
 const router = express.Router();
 
+router.get("/me", verifyToken, getMe);
 router.post("/login", login);
 router.post("/register", upload.single("profile_image"), register);
 router.post("/logout", verifyToken, logout);

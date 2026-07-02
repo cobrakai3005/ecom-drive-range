@@ -248,6 +248,7 @@ CREATE TABLE IF NOT EXISTS orders (
     id INT AUTO_INCREMENT PRIMARY KEY,
     user_id INT NOT NULL,
     order_status ENUM('pending', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled', 'refunded') DEFAULT 'pending',
+    delivered_at TIMESTAMP NULL,
     order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     shipping_address_id INT NOT NULL,
     billing_address_id INT NOT NULL,
@@ -293,7 +294,8 @@ CREATE TABLE IF NOT EXISTS order_items (
     unit_price DECIMAL(10,2) NOT NULL,
     total_price DECIMAL(10,2) GENERATED ALWAYS AS (quantity * unit_price) STORED,
     product_data_snapshot JSON NOT NULL,         -- stores product_name, SKU, attributes at purchase time
-    
+    claimed_quantity INT NOT NULL DEFAULT 0,
+   warranty_claimed_at TIMESTAMP NULL,
     FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE ON UPDATE CASCADE,
     FOREIGN KEY (product_item_id) REFERENCES product_items(id) ON DELETE RESTRICT ON UPDATE CASCADE,
     
@@ -661,6 +663,7 @@ CREATE TABLE IF NOT EXISTS product (
     width DECIMAL(8,2),
     height DECIMAL(8,2),
     depth DECIMAL(8,2),
+    warranty_months INT DEFAULT NULL ,
     is_available BOOLEAN DEFAULT TRUE,
     is_featured BOOLEAN DEFAULT TRUE,
     is_front BOOLEAN DEFAULT TRUE,

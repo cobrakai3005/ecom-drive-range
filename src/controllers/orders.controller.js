@@ -735,10 +735,20 @@ export const updateOrderStatus = async (req, res) => {
     ]);
 
     const oldStatus = existing[0].order_status;
-    await pool.query(
-      "UPDATE orders SET order_status = ?, admin_notes = ? WHERE id = ?",
-      [order_status, admin_notes || null, id],
-    );
+    let updateQuery = `
+  UPDATE orders
+  SET order_status = ?, admin_notes = ?
+`;
+    const params = [order_status, admin_notes || null];
+
+    if (order_status === "delivered" && oldStatus !== "delivered") {
+      updateQuery += `, delivered_at = NOW()`;
+    }
+
+    updateQuery += ` WHERE id = ?`;
+    params.push(id);
+
+    await pool.query(updateQuery, params);
 
     const [newOrder] = await pool.query("SELECT * FROM orders WHERE id = ?", [
       orderId,

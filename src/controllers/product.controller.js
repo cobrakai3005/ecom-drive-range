@@ -182,9 +182,11 @@ export const createProduct = async (req, res) => {
       is_front,
       available_stock,
       active,
+
       vehicle_generation_ids = [], // 👈 add this
     } = req.body;
-
+    const warranty_months =
+      req.body.warranty_months === 0 ? null : req.body.warranty_months;
     // Validate required
     if (!category_id || !sub_category_id || !name || !sku) {
       await connection.rollback();
@@ -206,8 +208,8 @@ export const createProduct = async (req, res) => {
     short_description, long_description, seo_title, seo_description, seo_keywords,
     sku, price, weight, width, height, depth,
     is_available, is_featured, is_front, available_stock,
-    status, product_created_at, product_updated_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+    status, product_created_at, product_updated_at,warranty_months
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), ?)`,
       [
         category_id,
         sub_category_id,
@@ -230,6 +232,7 @@ export const createProduct = async (req, res) => {
         is_front !== undefined ? is_front : 1,
         available_stock || 0,
         active || "active",
+        warranty_months || null,
       ],
     );
 
@@ -376,7 +379,8 @@ export const updateProduct = async (req, res) => {
       status,
       vehicle_generation_ids,
     } = req.body;
-
+    const warranty_months =
+      req.body.warranty_months === 0 ? null : req.body.warranty_months;
     // Check existence
     const [existing] = await connection.query(
       "SELECT * FROM product WHERE id = ?",
@@ -422,7 +426,8 @@ export const updateProduct = async (req, res) => {
         is_front = ?,
         available_stock = ?,
         status = ?,
-        product_updated_at = ?
+        product_updated_at = ?,
+        warranty_months = ?
       WHERE id = ?`,
       [
         category_id,
@@ -447,6 +452,7 @@ export const updateProduct = async (req, res) => {
         available_stock || 0,
         status || "active",
         now, // only one timestamp
+        warranty_months,
         id,
       ],
     );

@@ -2,14 +2,14 @@ import { pool } from "../config/db.js";
 
 // Customer: add review for a purchased product (verified purchase)
 export const addReview = async (req, res) => {
-  const { order_item_id, rating, review } = req.body;
+  const { order_item_id, rating, review, is_front } = req.body;
   const userId = req.user.id;
 
   if (
     !order_item_id ||
     !Number.isInteger(Number(rating)) ||
-    rating < 1 ||
-    rating > 5
+    Number(rating) < 1 ||
+    Number(rating) > 5
   ) {
     return res.status(400).json({
       success: false,
@@ -17,46 +17,84 @@ export const addReview = async (req, res) => {
     });
   }
 
+  const images =
+    req.files?.map((file) => ({
+      url: file.path,
+      public_id: file.filename, // or file.public_id depending on your configuration
+    })) || [];
+
   try {
     // Verify order_item belongs to user and order is delivered
     const [orderItem] = await pool.query(
-      `SELECT oi.id, o.user_id, o.order_status, oi.product_id
+      `SELECT oi.id, oi.product_id, o.user_id, o.order_status
        FROM order_items oi
        JOIN orders o ON oi.order_id = o.id
-       WHERE oi.id = ? AND o.user_id = ? AND o.order_status = 'delivered'`,
+       WHERE oi.id = ? 
+         AND o.user_id = ? 
+         AND o.order_status = 'delivered'`,
       [order_item_id, userId],
     );
+
     if (!orderItem.length) {
       return res.status(403).json({
         success: false,
-        message: "You can only review delivered items",
+        message: "You can only review delivered items.",
       });
     }
-    const productItemId = orderItem[0].product_id;
+
+    const productId = orderItem[0].product_id;
 
     // Check if already reviewed
     const [existing] = await pool.query(
-      `SELECT id FROM product_reviews WHERE order_item_id = ? AND user_id = ?`,
+      `SELECT id
+       FROM product_reviews
+       WHERE order_item_id = ?
+         AND user_id = ?`,
       [order_item_id, userId],
     );
+
     if (existing.length) {
-      return res
-        .status(400)
-        .json({ success: false, message: "You already reviewed this item" });
+      return res.status(400).json({
+        success: false,
+        message: "You have already reviewed this item.",
+      });
     }
-    console.log("Product ID:", productItemId);
+
+    // Insert review
     await pool.query(
-      `INSERT INTO product_reviews (user_id, product_id, order_item_id, rating, review, is_verified_purchase, status)
-     VALUES (?, ?, ?, ?, ?, TRUE, 'pending')`,
-      [userId, productItemId, order_item_id, rating, review],
+      `INSERT INTO product_reviews (
+          user_id,
+          product_id,
+          order_item_id,
+          rating,
+          review,
+          is_front,
+          images,
+          is_verified_purchase,
+          status
+      )
+      VALUES (?, ?, ?, ?, ?,FALSE, ?, TRUE, 'pending')`,
+      [
+        userId,
+        productId,
+        order_item_id,
+        Number(rating),
+        review || null,
+        JSON.stringify(images),
+      ],
     );
 
-    res
-      .status(201)
-      .json({ success: true, message: "Review submitted, pending approval" });
+    return res.status(201).json({
+      success: true,
+      message: "Review submitted successfully and is pending approval.",
+    });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, message: "Server error" });
+    console.error("Add Review Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error.",
+    });
   }
 };
 
@@ -208,13 +246,155 @@ export const getAllReviews = async (req, res) => {
   }
 };
 
+
+// Get Featured Review
+
+export const getFeaturedReviews = async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const offset = (page - 1) * limit;
+
+    const [[{ total }]] = await pool.query(
+      `SELECT COUNT(*) AS total
+       FROM product_reviews
+       WHERE status = 'approved'
+         AND is_front = TRUE`
+    );
+
+    const [reviews] = await pool.query(
+      `SELECT
+          r.id,
+          r.rating,
+          r.review,
+          r.images,
+          r.created_at,
+          r.is_verified_purchase,
+          u.full_name,
+          p.name AS product_name
+       FROM product_reviews r
+       JOIN users u ON u.id = r.user_id
+       JOIN product p ON p.id = r.product_id
+       WHERE r.status = 'approved'
+         AND r.is_front = TRUE
+       ORDER BY r.created_at DESC
+       LIMIT ? OFFSET ?`,
+      [limit, offset]
+    );
+
+    return res.json({
+      success: true,
+      data: reviews,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages: Math.ceil(total / limit),
+      },
+    });
+  } catch (error) {
+    console.error("Get Featured Reviews Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error.",
+    });
+  }
+};
+
 // User: Delete own review
+import cloudinary from "../config/cloudinary.js";
+
 export const deleteReview = async (req, res) => {
   const { id } = req.params;
-  const userId = req.user.id;
+  const { id: userId, role } = req.user;
 
   try {
-    // Check review ownership
+    let query;
+    let params;
+
+    if (role === "Admin") {
+      // Admin can delete any review
+      query = `
+        SELECT images
+        FROM product_reviews
+        WHERE id = ?`;
+      params = [id];
+    } else {
+      // User can delete only their own review
+      query = `
+        SELECT images
+        FROM product_reviews
+        WHERE id = ? AND user_id = ?`;
+      params = [id, userId];
+    }
+
+    const [reviews] = await pool.query(query, params);
+
+    if (!reviews.length) {
+      return res.status(404).json({
+        success: false,
+        message: "Review not found or you are not authorized to delete it.",
+      });
+    }
+
+    const images = reviews[0].images ? JSON.parse(reviews[0].images) : [];
+
+    // Delete Cloudinary images
+    await Promise.all(
+      images.map(async (image) => {
+        if (image.public_id) {
+          try {
+            await cloudinary.uploader.destroy(image.public_id);
+          } catch (err) {
+            console.error(`Failed to delete image ${image.public_id}:`, err);
+          }
+        }
+      }),
+    );
+
+    await pool.query(
+      `DELETE FROM product_reviews
+       WHERE id = ?`,
+      [id],
+    );
+
+    return res.json({
+      success: true,
+      message: "Review deleted successfully.",
+    });
+  } catch (error) {
+    console.error("Delete Review Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error.",
+    });
+  }
+};
+
+export const updateReview = async (req, res) => {
+  const { id } = req.params;
+  const { rating, review } = req.body;
+  const userId = req.user.id;
+
+  if (
+    !Number.isInteger(Number(rating)) ||
+    Number(rating) < 1 ||
+    Number(rating) > 5
+  ) {
+    return res.status(400).json({
+      success: false,
+      message: "Rating must be between 1 and 5.",
+    });
+  }
+
+  const images = req.files?.map((file) => ({
+    url: file.path, // Cloudinary URL
+    public_id: file.filename, // or file.public_id depending on your setup
+  }));
+
+  try {
     const [reviews] = await pool.query(
       `SELECT id
        FROM product_reviews
@@ -225,25 +405,252 @@ export const deleteReview = async (req, res) => {
     if (!reviews.length) {
       return res.status(404).json({
         success: false,
-        message: "Review not found or you are not authorized to delete it.",
+        message: "Review not found or you are not authorized to update it.",
       });
     }
 
     await pool.query(
-      `DELETE FROM product_reviews
+      `UPDATE product_reviews
+       SET
+         rating = ?,
+         review = ?,
+         images = ?,
+         status = 'pending',
+         updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [Number(rating), review || null, JSON.stringify(images), id],
+    );
+
+    return res.json({
+      success: true,
+      message: "Review updated successfully and is pending approval.",
+    });
+  } catch (error) {
+    console.error(error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error.",
+    });
+  }
+};
+// export const getProductReviews = async (req, res) => {
+//   const { productId } = req.params;
+
+//   try {
+//     // Check product exists
+//     const [product] = await pool.query(`SELECT id FROM product WHERE id = ?`, [
+//       productId,
+//     ]);
+
+//     if (product.length === 0) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "Product not found",
+//       });
+//     }
+
+//     // Reviews
+//     const [reviews] = await pool.query(
+//       `
+//       SELECT
+//           pr.id,
+//           pr.rating,
+//           pr.review,
+//           pr.is_verified_purchase,
+//           pr.created_at,
+
+//           u.id AS user_id,
+//           u.full_name,
+//           u.profile_image
+
+//       FROM product_reviews pr
+//       JOIN users u
+//           ON pr.user_id = u.id
+
+//       WHERE
+//           pr.product_id = ?
+//           AND pr.status = 'approved'
+
+//       ORDER BY pr.created_at DESC
+//       `,
+//       [productId],
+//     );
+
+//     // Summary
+//     const [summary] = await pool.query(
+//       `
+//       SELECT
+//           COUNT(*) AS total_reviews,
+//           ROUND(AVG(rating),1) AS average_rating,
+
+//           SUM(CASE WHEN rating = 5 THEN 1 ELSE 0 END) AS five_star,
+//           SUM(CASE WHEN rating = 4 THEN 1 ELSE 0 END) AS four_star,
+//           SUM(CASE WHEN rating = 3 THEN 1 ELSE 0 END) AS three_star,
+//           SUM(CASE WHEN rating = 2 THEN 1 ELSE 0 END) AS two_star,
+//           SUM(CASE WHEN rating = 1 THEN 1 ELSE 0 END) AS one_star
+
+//       FROM product_reviews
+//       WHERE
+//           product_id = ?
+//           AND status = 'approved'
+//       `,
+//       [productId],
+//     );
+
+//     return res.status(200).json({
+//       success: true,
+//       message: "Reviews fetched successfully",
+//       data: {
+//         summary: {
+//           total_reviews: Number(summary[0].total_reviews),
+//           average_rating: Number(summary[0].average_rating || 0),
+//           breakdown: {
+//             5: Number(summary[0].five_star),
+//             4: Number(summary[0].four_star),
+//             3: Number(summary[0].three_star),
+//             2: Number(summary[0].two_star),
+//             1: Number(summary[0].one_star),
+//           },
+//         },
+//         reviews,
+//       },
+//     });
+//   } catch (error) {
+//     console.error("Error fetching reviews:", error);
+
+//     return res.status(500).json({
+//       success: false,
+//       message: "Failed to fetch reviews",
+//       error: error.message,
+//     });
+//   }
+// };
+
+export const toggleReviewFrontStatus = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    // Check if review exists
+    const [reviews] = await pool.query(
+      `SELECT id, is_front
+       FROM product_reviews
        WHERE id = ?`,
       [id],
     );
 
-    res.json({
+    if (!reviews.length) {
+      return res.status(404).json({
+        success: false,
+        message: "Review not found.",
+      });
+    }
+
+    const currentStatus = Boolean(reviews[0].is_front);
+    const newStatus = !currentStatus;
+
+    await pool.query(
+      `UPDATE product_reviews
+       SET
+         is_front = ?,
+         updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [newStatus, id],
+    );
+
+    return res.json({
       success: true,
-      message: "Review deleted successfully.",
+      message: `Review ${
+        newStatus ? "added to" : "removed from"
+      } front successfully.`,
+      data: {
+        id: Number(id),
+        is_front: newStatus,
+      },
     });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({
+    console.error("Toggle Review Front Status Error:", error);
+
+    return res.status(500).json({
       success: false,
-      message: "Server error",
+      message: "Server error.",
+    });
+  }
+};
+
+export const deleteReviewImages = async (req, res) => {
+  const { id } = req.params;
+  const { public_ids } = req.body;
+  const { id: userId, role } = req.user;
+
+  if (!Array.isArray(public_ids) || public_ids.length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: "public_ids must be a non-empty array.",
+    });
+  }
+
+  try {
+    // Admin can delete images from any review
+    // User can only delete images from their own review
+    const [reviews] = await pool.query(
+      role === "Admin"
+        ? `SELECT images
+           FROM product_reviews
+           WHERE id = ?`
+        : `SELECT images
+           FROM product_reviews
+           WHERE id = ? AND user_id = ?`,
+      role === "admin" ? [id] : [id, userId],
+    );
+
+    if (!reviews.length) {
+      return res.status(404).json({
+        success: false,
+        message: "Review not found or you are not authorized.",
+      });
+    }
+
+    const images = Array.isArray(reviews[0].images)
+      ? reviews[0].images
+      : JSON.parse(reviews[0].images || "[]");
+
+    // Delete matching images from Cloudinary
+    await Promise.all(
+      images
+        .filter((image) => public_ids.includes(image.public_id))
+        .map(async (image) => {
+          try {
+            await cloudinary.uploader.destroy(image.public_id);
+          } catch (err) {
+            console.error(`Failed to delete ${image.public_id}:`, err);
+          }
+        }),
+    );
+
+    // Keep only remaining images
+    const remainingImages = images.filter(
+      (image) => !public_ids.includes(image.public_id),
+    );
+
+    await pool.query(
+      `UPDATE product_reviews
+       SET images = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [JSON.stringify(remainingImages), id],
+    );
+
+    return res.json({
+      success: true,
+      message: "Image(s) deleted successfully.",
+      data: remainingImages,
+    });
+  } catch (error) {
+    console.error("Delete Review Images Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error.",
     });
   }
 };
