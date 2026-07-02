@@ -17,7 +17,7 @@ app.use(
       process.env.FRONTEND_URL,
       "http://localhost:5173",
       "http://localhost:5174",
-      "https://full4-4.vercel.app",
+      process.env.FRONTEND_URL_2,
     ],
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
     credentials: true,
