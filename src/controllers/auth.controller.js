@@ -154,9 +154,7 @@ export const login = async (req, res) => {
     // Merge Cart
 
     const userId = existingUser.id;
-    const sessionToken = req.headers["x-session-token"] || null;
 
-    const userId = existingUser.id;
     const sessionToken = req.headers["x-session-token"] || null;
 
     if (sessionToken) {
