@@ -151,6 +151,36 @@ export const login = async (req, res) => {
       maxAge: 24 * 60 * 60 * 1000,
     });
 
+    // Merge Cart
+
+    const userId = existingUser.id;
+    const sessionToken = req.headers["x-session-token"] || null;
+
+    if (sessionToken) {
+      // Fetch Cart
+
+      if (sessionToken) {
+        // Check if guest cart exists
+        const [guestCart] = await pool.query(
+          "SELECT id FROM cart WHERE session_token = ? LIMIT 1",
+          [sessionToken],
+        );
+
+        if (guestCart.length) {
+          // If user already has a cart, delete it (or handle differently if needed)
+          await pool.query("DELETE FROM cart WHERE user_id = ?", [userId]);
+
+          // Assign guest cart to the user
+          await pool.query(
+            `UPDATE cart
+       SET user_id = ?, session_token = NULL
+       WHERE id = ?`,
+            [userId, guestCart[0].id],
+          );
+        }
+      }
+    }
+
     return res.status(200).json({
       success: true,
       message: "Login successful",

@@ -298,6 +298,8 @@ CREATE TABLE IF NOT EXISTS order_items (
    warranty_claimed_at TIMESTAMP NULL,
     FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE ON UPDATE CASCADE,
     FOREIGN KEY (product_item_id) REFERENCES product_items(id) ON DELETE RESTRICT ON UPDATE CASCADE,
+    tax_percentage DECIMAL(5,2) DEFAULT 0,
+tax_amount DECIMAL(10,2) DEFAULT 0,
     
     INDEX idx_order_id (order_id),
     INDEX idx_product_item_id (product_item_id)
@@ -659,6 +661,7 @@ CREATE TABLE IF NOT EXISTS product (
     product_updated_at TIMESTAMP,
     sku VARCHAR(100) NOT NULL UNIQUE,
     price DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+    tax_percentage DECIMAL(5,2) NOT NULL DEFAULT 0.00,
     weight DECIMAL(8,2),
     width DECIMAL(8,2),
     height DECIMAL(8,2),

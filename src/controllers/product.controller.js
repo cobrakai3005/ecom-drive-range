@@ -180,6 +180,7 @@ export const createProduct = async (req, res) => {
       is_available,
       is_featured,
       is_front,
+      tax_percentage,
       available_stock,
       active,
 
@@ -208,8 +209,8 @@ export const createProduct = async (req, res) => {
     short_description, long_description, seo_title, seo_description, seo_keywords,
     sku, price, weight, width, height, depth,
     is_available, is_featured, is_front, available_stock,
-    status, product_created_at, product_updated_at,warranty_months
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), ?)`,
+    status, product_created_at, product_updated_at,warranty_months,tax_percentage
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), ?, ?)`,
       [
         category_id,
         sub_category_id,
@@ -233,6 +234,7 @@ export const createProduct = async (req, res) => {
         available_stock || 0,
         active || "active",
         warranty_months || null,
+        tax_percentage || 0.0,
       ],
     );
 
@@ -378,14 +380,17 @@ export const updateProduct = async (req, res) => {
       available_stock,
       status,
       vehicle_generation_ids,
+      tax_percentage,
     } = req.body;
     const warranty_months =
       req.body.warranty_months === 0 ? null : req.body.warranty_months;
     // Check existence
+    console.log(req.body, "3456789");
     const [existing] = await connection.query(
       "SELECT * FROM product WHERE id = ?",
       [id],
     );
+
     if (existing.length === 0) {
       await connection.rollback();
       return res
@@ -427,7 +432,8 @@ export const updateProduct = async (req, res) => {
         available_stock = ?,
         status = ?,
         product_updated_at = ?,
-        warranty_months = ?
+        warranty_months = ?,
+        tax_percentage = ?
       WHERE id = ?`,
       [
         category_id,
@@ -453,6 +459,7 @@ export const updateProduct = async (req, res) => {
         status || "active",
         now, // only one timestamp
         warranty_months,
+        tax_percentage || 0.0,
         id,
       ],
     );
@@ -669,5 +676,116 @@ export const toggleProductStatus = async (req, res) => {
   } catch (error) {
     console.error("Error in toggleProductStatus:", error);
     res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+/**
+ * GET /api/products
+ * Query params:
+ *   - make_id (optional)
+ *   - model_id (optional)
+ *   - generation_id (optional)
+ *   - compatibility_id (optional)
+ *   - page (default 1)
+ *   - per_page (default 15, max 100)
+ */
+export const getVehicleProducts = async (req, res, next) => {
+  try {
+    // 1. Parse and validate query params
+    const {
+      make_id,
+      model_id,
+      generation_id,
+      compatibility_id,
+      page = 1,
+      per_page = 15,
+    } = req.query;
+
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const perPageNum = Math.min(100, Math.max(1, parseInt(per_page, 10) || 15));
+    const offset = (pageNum - 1) * perPageNum;
+
+    // 2. Build the base SQL with filters
+    //    We'll use a single query that joins all tables and selects distinct products.
+    //    We'll conditionally append WHERE clauses.
+    let sql = `
+      SELECT DISTINCT p.*
+      FROM products p
+      INNER JOIN product_vehicle_compatibility pvc ON p.id = pvc.product_id
+      INNER JOIN vehicle_generations vg ON pvc.vehicle_generation_id = vg.id
+      INNER JOIN vehicle_models vm ON vg.model_id = vm.id
+      INNER JOIN vehicle_makes vmk ON vm.make_id = vmk.id
+      WHERE p.status = 'active'
+        AND vg.status = 'active'
+        AND vm.status = 'active'
+        AND vmk.status = 'active'
+    `;
+
+    // 3. Append filters conditionally
+    const params = [];
+    if (make_id) {
+      sql += ` AND vmk.id = ?`;
+      params.push(make_id);
+    }
+    if (model_id) {
+      sql += ` AND vm.id = ?`;
+      params.push(model_id);
+    }
+    if (generation_id) {
+      sql += ` AND vg.id = ?`;
+      params.push(generation_id);
+    }
+    if (compatibility_id) {
+      sql += ` AND pvc.id = ?`;
+      params.push(compatibility_id);
+    }
+
+    // 4. Count query (total matching products)
+    const countSql = `
+      SELECT COUNT(DISTINCT p.id) AS total
+      FROM products p
+      INNER JOIN product_vehicle_compatibility pvc ON p.id = pvc.product_id
+      INNER JOIN vehicle_generations vg ON pvc.vehicle_generation_id = vg.id
+      INNER JOIN vehicle_models vm ON vg.model_id = vm.id
+      INNER JOIN vehicle_makes vmk ON vm.make_id = vmk.id
+      WHERE p.status = 'active'
+        AND vg.status = 'active'
+        AND vm.status = 'active'
+        AND vmk.status = 'active'
+        ${make_id ? " AND vmk.id = ?" : ""}
+        ${model_id ? " AND vm.id = ?" : ""}
+        ${generation_id ? " AND vg.id = ?" : ""}
+        ${compatibility_id ? " AND pvc.id = ?" : ""}
+    `;
+    // Build params for count (same as data query)
+    const countParams = [];
+    if (make_id) countParams.push(make_id);
+    if (model_id) countParams.push(model_id);
+    if (generation_id) countParams.push(generation_id);
+    if (compatibility_id) countParams.push(compatibility_id);
+
+    // 5. Execute count query
+    const [countRows] = await pool.query(countSql, countParams);
+    const total = countRows[0].total;
+
+    // 6. Add pagination (ORDER BY and LIMIT/OFFSET)
+    const dataSql = sql + ` ORDER BY p.id ASC LIMIT ? OFFSET ?`;
+    const dataParams = [...params, perPageNum, offset];
+
+    // 7. Execute data query
+    const [dataRows] = await pool.query(dataSql, dataParams);
+
+    // 8. Send response
+    res.json({
+      data: dataRows,
+      pagination: {
+        current_page: pageNum,
+        per_page: perPageNum,
+        total,
+        total_pages: Math.ceil(total / perPageNum),
+      },
+    });
+  } catch (error) {
+    next(error);
   }
 };

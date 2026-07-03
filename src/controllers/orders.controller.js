@@ -43,6 +43,7 @@ const getCartItems = async (cartId) => {
       p.sku,
       p.price,
       p.name AS product_name,
+      p.tax_percentage,
       (
         SELECT image_url 
         FROM product_media 
@@ -73,6 +74,7 @@ const getCartItems = async (cartId) => {
         sku: prod.sku,
         price: prod.price, // current live price
         product_name: prod.product_name,
+        tax_percentage: prod.tax_percentage,
         primary_image: prod.primary_image, // current primary image
       });
     }
@@ -188,116 +190,6 @@ export const validateCoupon = async (db, couponCode, subtotal, userId) => {
 
 // ========== CREATING order from cart ==========
 
-// =============================================================
-// STEP 1 — Initiate: validate cart + coupon, create Razorpay order
-// =============================================================
-// export const initiateRazorpayCheckout = async (req, res) => {
-//   const userId = req.user?.id;
-//   console.log("Initialize payment");
-//   const connection = await pool.getConnection();
-//   if (!userId) {
-//     return res.status(401).json({ success: false, message: "Unauthorized" });
-//   }
-
-//   const {
-//     shipping_address_id,
-//     billing_address_id,
-//     coupon_code = null,
-//   } = req.body;
-
-//   if (!shipping_address_id || !billing_address_id) {
-//     return res.status(400).json({
-//       success: false,
-//       message: "Shipping and Billing addresses are required",
-//     });
-//   }
-
-//   // 1. Fetch cart
-//   const [cartRows] = await pool.query("SELECT id FROM cart WHERE user_id = ?", [
-//     userId,
-//   ]);
-//   if (cartRows.length === 0) {
-//     return res.status(400).json({ success: false, message: "Cart not found" });
-//   }
-
-//   const cartId = cartRows[0].id;
-//   const items = await getCartItems(cartId);
-
-//   if (items.length === 0) {
-//     return res.status(400).json({ success: false, message: "Cart is empty" });
-//   }
-
-//   // 2. Calculate subtotal
-//   let subtotal = 0;
-//   for (const item of items) subtotal += item.quantity * item.unit_price;
-
-//   // 3. Validate coupon (read-only — no transaction needed here)
-//   let discount_amount = 0;
-//   if (coupon_code) {
-//     try {
-//       // FOR UPDATE is fine on pool without a transaction; it locks for the
-//       // duration of the single query which is all we need here.
-//       ({ discount_amount } = await validateCoupon(
-//         pool,
-//         coupon_code,
-//         subtotal,
-//         userId,
-//       ));
-//     } catch (err) {
-//       return res
-//         .status(err.status || 400)
-//         .json({ success: false, message: err.message });
-//     }
-//   }
-
-//   // 4. Calculate total
-//   const shipping_cost = parseFloat(req.body.shipping_cost) || 0;
-//   const tax_amount = parseFloat(req.body.tax_amount) || 0;
-//   const total_amount = subtotal + shipping_cost + tax_amount - discount_amount;
-
-//   if (total_amount <= 0) {
-//     return res
-//       .status(400)
-//       .json({ success: false, message: "Invalid total amount" });
-//   }
-
-//   try {
-//     // 5. Create Razorpay order — store all checkout data in notes so the
-//     //    verify step can reconstruct it without relying on session state.
-//     const razorpayOrder = await razorpayInstance.orders.create({
-//       amount: Math.round(total_amount * 100), // paise
-//       currency: "INR",
-//       receipt: `receipt_${Date.now()}`,
-//       notes: {
-//         user_id: String(userId),
-//         cart_id: String(cartId),
-//         shipping_address_id: String(shipping_address_id),
-//         billing_address_id: String(billing_address_id),
-//         coupon_code: coupon_code || "",
-//         calculated_discount: String(discount_amount),
-//         shipping_cost: String(shipping_cost),
-//         tax_amount: String(tax_amount),
-//         subtotal: String(subtotal),
-//       },
-//     });
-
-//     return res.status(200).json({
-//       success: true,
-//       data: {
-//         razorpayOrderId: razorpayOrder.id,
-//         amount: razorpayOrder.amount,
-//         currency: razorpayOrder.currency,
-//         key: process.env.RAZORPAY_KEY_ID,
-//       },
-//     });
-//   } catch (error) {
-//     console.error("Razorpay Init Error:", error);
-//     return res
-//       .status(500)
-//       .json({ success: false, message: "Failed to initiate payment" });
-//   }
-// };
-
 export const initiateRazorpayCheckout = async (req, res) => {
   const userId = req.user?.id;
 
@@ -361,7 +253,17 @@ export const initiateRazorpayCheckout = async (req, res) => {
     }
 
     const shipping_cost = parseFloat(req.body.shipping_cost) || 0;
-    const tax_amount = parseFloat(req.body.tax_amount) || 0;
+
+    let tax_amount = 0;
+
+    for (const item of items) {
+      const itemSubtotal = item.quantity * item.unit_price;
+      const itemTax = (itemSubtotal * item.tax_percentage) / 100;
+
+      tax_amount += itemTax;
+    }
+
+    tax_amount = Number(tax_amount.toFixed(2));
 
     const total_amount =
       subtotal + shipping_cost + tax_amount - discount_amount;
@@ -459,7 +361,6 @@ export const verifyRazorpayAndCreateOrder = async (req, res) => {
   const billing_address_id = parseInt(notes.billing_address_id);
   const coupon_code = notes.coupon_code || null;
   const shipping_cost = parseFloat(notes.shipping_cost) || 0;
-  const tax_amount = parseFloat(notes.tax_amount) || 0;
 
   // 3. Re-fetch cart items (always use latest DB prices — never trust client data)
   const items = await getCartItems(cartId);
@@ -522,11 +423,44 @@ export const verifyRazorpayAndCreateOrder = async (req, res) => {
           .json({ success: false, message: err.message });
       }
     }
+    let tax_amount = 0;
+
+    for (const item of items) {
+      const itemSubtotal = item.quantity * item.unit_price;
+
+      // Proportional discount per item
+      const itemDiscount =
+        subtotal > 0 ? (itemSubtotal / subtotal) * discount_amount : 0;
+
+      const taxableAmount = itemSubtotal - itemDiscount;
+
+      const itemTax =
+        (taxableAmount * (parseFloat(item.tax_percentage) || 0)) / 100;
+
+      tax_amount += itemTax;
+    }
+
+    tax_amount = Number(tax_amount.toFixed(2));
 
     // --- D) Final totals ---
     const total_amount =
       subtotal + shipping_cost + tax_amount - discount_amount;
-    console.log(appliedCouponId, "applied#$%^&*()*&^%$#%^&*(");
+    const razorpayPaidAmount = Number((razorpayOrder.amount / 100).toFixed(2));
+    const backendTotalAmount = Number(total_amount.toFixed(2));
+
+    if (razorpayPaidAmount !== backendTotalAmount) {
+      await connection.rollback();
+      return res.status(400).json({
+        success: false,
+        message: "Payment amount mismatch",
+        details: {
+          paid: razorpayPaidAmount,
+          expected: backendTotalAmount,
+        },
+      });
+    }
+
+    // console.log(appliedCouponId, "applied#$%^&*()*&^%$#%^&*(");
     // --- E) Insert order ---
     const [orderResult] = await connection.query(
       `INSERT INTO orders
@@ -553,20 +487,51 @@ export const verifyRazorpayAndCreateOrder = async (req, res) => {
 
     // --- F) Insert order items (snapshot prices at time of purchase) ---
     for (const item of items) {
+      const itemSubtotal = item.quantity * item.unit_price;
+
+      const itemDiscount =
+        subtotal > 0 ? (itemSubtotal / subtotal) * discount_amount : 0;
+
+      const taxableAmount = itemSubtotal - itemDiscount;
+
+      const itemTax = Number(
+        (
+          (taxableAmount * (parseFloat(item.tax_percentage) || 0)) /
+          100
+        ).toFixed(2),
+      );
+
       const snapshot = {
         product_name: item.product_name,
         sku: item.sku,
         unit_price_at_purchase: item.unit_price,
+        tax_percentage: item.tax_percentage,
+        tax_amount: itemTax,
       };
+
+      console.log("ORDER ITEM TAX DEBUG:", {
+        product_id: item.product_id,
+        raw_tax_percentage: item.tax_percentage,
+        parsed_tax_percentage: parseFloat(item.tax_percentage),
+        itemTax,
+      });
       await connection.query(
+        //     `INSERT INTO order_items
+        //    (order_id, product_id, quantity, unit_price, total_price,
+        //     tax_percentage, tax_amount, product_data_snapshot)
+        //  VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         `INSERT INTO order_items
-           (order_id, product_id, quantity, unit_price, product_data_snapshot)
-         VALUES (?, ?, ?, ?, ?)`,
+ (order_id, product_id, quantity, unit_price,
+  tax_percentage, tax_amount, product_data_snapshot)
+ VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [
           orderId,
           item.product_id,
           item.quantity,
           item.unit_price,
+
+          item.tax_percentage || 0,
+          itemTax,
           JSON.stringify(snapshot),
         ],
       );
@@ -654,33 +619,104 @@ export const verifyRazorpayAndCreateOrder = async (req, res) => {
   }
 };
 
+// export const getOrderDetails = async (req, res) => {
+//   const { id } = req.params;
+//   const userId = req.user.id;
+//   console.log(userId);
+
+//   try {
+//     const [orderRows] = await pool.query(
+//       `SELECT * FROM orders WHERE id = ? AND user_id = ?`,
+//       [id, userId],
+//     );
+//     if (orderRows.length === 0) {
+//       return res
+//         .status(404)
+//         .json({ success: false, message: "Order not found" });
+//     }
+//     const [items] = await pool.query(
+//       `SELECT id, product_id, quantity, unit_price, total_price, product_data_snapshot
+//              FROM order_items WHERE order_id = ?`,
+//       [id],
+//     );
+//     res.json({ success: true, data: { ...orderRows[0], items } });
+//   } catch (error) {
+//     console.error(error);
+//     res.status(500).json({ success: false, message: "Server error" });
+//   }
+// };
+// ========== GET all orders for logged-in user ==========
+
 export const getOrderDetails = async (req, res) => {
   const { id } = req.params;
   const userId = req.user.id;
-  console.log(userId);
 
   try {
     const [orderRows] = await pool.query(
       `SELECT * FROM orders WHERE id = ? AND user_id = ?`,
       [id, userId],
     );
+
     if (orderRows.length === 0) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Order not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Order not found",
+      });
     }
+
     const [items] = await pool.query(
-      `SELECT id, product_id, quantity, unit_price, total_price, product_data_snapshot
-             FROM order_items WHERE order_id = ?`,
+      `SELECT 
+        id,
+        product_id,
+        quantity,
+        unit_price,
+        total_price,
+        product_data_snapshot
+       FROM order_items
+       WHERE order_id = ?`,
       [id],
     );
-    res.json({ success: true, data: { ...orderRows[0], items } });
+
+    const [shipmentRows] = await pool.query(
+      `SELECT 
+        id,
+        carrier,
+        recipient_address,
+        current_status,
+        tracking_history,
+        created_at,
+        updated_at
+       FROM shipments
+       WHERE order_id = ?
+       ORDER BY created_at DESC`,
+      [id],
+    );
+
+    const shipments = shipmentRows.map((shipment) => ({
+      ...shipment,
+      tracking_history:
+        typeof shipment.tracking_history === "string"
+          ? JSON.parse(shipment.tracking_history || "[]")
+          : shipment.tracking_history || [],
+    }));
+
+    return res.json({
+      success: true,
+      data: {
+        ...orderRows[0],
+        items,
+        shipments,
+      },
+    });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ success: false, message: "Server error" });
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
   }
 };
-// ========== GET all orders for logged-in user ==========
+
 export const getUserOrders = async (req, res) => {
   const userId = req.user.id;
   try {

@@ -21,7 +21,11 @@ const safeParseJSON = (jsonField) => {
   return [];
 };
 // Helper: get or create cart for user/session
-const getOrCreateCart = async (userId, sessionToken, connection = null) => {
+export const getOrCreateCart = async (
+  userId,
+  sessionToken,
+  connection = null,
+) => {
   const db = connection || pool;
   let cartId = null;
   console.log(userId);
@@ -93,6 +97,7 @@ export const getCart = async (req, res) => {
         p.name AS product_name,
         p.sku,
         p.price AS current_price,
+        p.tax_percentage,
         p.available_stock,
         (
           SELECT image_url 
@@ -118,6 +123,7 @@ export const getCart = async (req, res) => {
         current_price: row.current_price,
         available_stock: row.available_stock,
         primary_image: row.primary_image || null,
+        tax_percentage: row.tax_percentage || null,
       };
     });
 
@@ -136,6 +142,7 @@ export const getCart = async (req, res) => {
         current_price: details?.current_price || item.unit_price,
         available_stock: details?.available_stock || null,
         primary_image: details?.primary_image || item.image_url,
+        tax_percentage: details?.tax_percentage || null,  
       };
     });
 

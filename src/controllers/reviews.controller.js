@@ -98,6 +98,103 @@ export const addReview = async (req, res) => {
   }
 };
 
+export const getMyReviews = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 10));
+    const offset = (page - 1) * limit;
+
+    const { status, search } = req.query;
+
+    const whereConditions = ["r.user_id = ?"];
+    const params = [userId];
+
+    if (status) {
+      whereConditions.push("r.status = ?");
+      params.push(status);
+    }
+
+    if (search) {
+      whereConditions.push(
+        "(p.name LIKE ? OR p.sku LIKE ? OR r.review LIKE ?)",
+      );
+
+      const keyword = `%${search}%`;
+      params.push(keyword, keyword, keyword);
+    }
+
+    const whereClause = whereConditions.join(" AND ");
+
+    // Total count
+    const [[{ total }]] = await pool.query(
+      `
+      SELECT COUNT(*) AS total
+      FROM product_reviews r
+      JOIN product p ON p.id = r.product_id
+      WHERE ${whereClause}
+      `,
+      params,
+    );
+
+    // Reviews
+    const [reviews] = await pool.query(
+      `
+      SELECT
+        r.id,
+        r.product_id,
+        r.order_item_id,
+        r.rating,
+        r.review,
+        r.is_verified_purchase,
+        r.status,
+        r.created_at,
+        r.updated_at,
+
+        p.name AS product_name,
+        p.sku,
+        p.price,
+        (
+          SELECT pm.image_url
+          FROM product_media pm
+          WHERE pm.product_id = p.id
+            AND pm.status = 'active'
+          ORDER BY pm.sort_order ASC, pm.id ASC
+          LIMIT 1
+        ) AS product_image
+
+      FROM product_reviews r
+      JOIN product p ON p.id = r.product_id
+
+      WHERE ${whereClause}
+
+      ORDER BY r.created_at DESC
+      LIMIT ? OFFSET ?
+      `,
+      [...params, limit, offset],
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: reviews,
+      pagination: {
+        page,
+        limit,
+        totalItems: total,
+        totalPages: Math.ceil(total / limit),
+      },
+    });
+  } catch (error) {
+    console.error("Get My Reviews Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch your reviews.",
+      error: error.message,
+    });
+  }
+};
 // Admin/Staff: approve/reject review
 export const moderateReview = async (req, res) => {
   const { id } = req.params;
@@ -246,7 +343,6 @@ export const getAllReviews = async (req, res) => {
   }
 };
 
-
 // Get Featured Review
 
 export const getFeaturedReviews = async (req, res) => {
@@ -259,7 +355,7 @@ export const getFeaturedReviews = async (req, res) => {
       `SELECT COUNT(*) AS total
        FROM product_reviews
        WHERE status = 'approved'
-         AND is_front = TRUE`
+         AND is_front = TRUE`,
     );
 
     const [reviews] = await pool.query(
@@ -279,7 +375,7 @@ export const getFeaturedReviews = async (req, res) => {
          AND r.is_front = TRUE
        ORDER BY r.created_at DESC
        LIMIT ? OFFSET ?`,
-      [limit, offset]
+      [limit, offset],
     );
 
     return res.json({
@@ -434,98 +530,6 @@ export const updateReview = async (req, res) => {
     });
   }
 };
-// export const getProductReviews = async (req, res) => {
-//   const { productId } = req.params;
-
-//   try {
-//     // Check product exists
-//     const [product] = await pool.query(`SELECT id FROM product WHERE id = ?`, [
-//       productId,
-//     ]);
-
-//     if (product.length === 0) {
-//       return res.status(404).json({
-//         success: false,
-//         message: "Product not found",
-//       });
-//     }
-
-//     // Reviews
-//     const [reviews] = await pool.query(
-//       `
-//       SELECT
-//           pr.id,
-//           pr.rating,
-//           pr.review,
-//           pr.is_verified_purchase,
-//           pr.created_at,
-
-//           u.id AS user_id,
-//           u.full_name,
-//           u.profile_image
-
-//       FROM product_reviews pr
-//       JOIN users u
-//           ON pr.user_id = u.id
-
-//       WHERE
-//           pr.product_id = ?
-//           AND pr.status = 'approved'
-
-//       ORDER BY pr.created_at DESC
-//       `,
-//       [productId],
-//     );
-
-//     // Summary
-//     const [summary] = await pool.query(
-//       `
-//       SELECT
-//           COUNT(*) AS total_reviews,
-//           ROUND(AVG(rating),1) AS average_rating,
-
-//           SUM(CASE WHEN rating = 5 THEN 1 ELSE 0 END) AS five_star,
-//           SUM(CASE WHEN rating = 4 THEN 1 ELSE 0 END) AS four_star,
-//           SUM(CASE WHEN rating = 3 THEN 1 ELSE 0 END) AS three_star,
-//           SUM(CASE WHEN rating = 2 THEN 1 ELSE 0 END) AS two_star,
-//           SUM(CASE WHEN rating = 1 THEN 1 ELSE 0 END) AS one_star
-
-//       FROM product_reviews
-//       WHERE
-//           product_id = ?
-//           AND status = 'approved'
-//       `,
-//       [productId],
-//     );
-
-//     return res.status(200).json({
-//       success: true,
-//       message: "Reviews fetched successfully",
-//       data: {
-//         summary: {
-//           total_reviews: Number(summary[0].total_reviews),
-//           average_rating: Number(summary[0].average_rating || 0),
-//           breakdown: {
-//             5: Number(summary[0].five_star),
-//             4: Number(summary[0].four_star),
-//             3: Number(summary[0].three_star),
-//             2: Number(summary[0].two_star),
-//             1: Number(summary[0].one_star),
-//           },
-//         },
-//         reviews,
-//       },
-//     });
-//   } catch (error) {
-//     console.error("Error fetching reviews:", error);
-
-//     return res.status(500).json({
-//       success: false,
-//       message: "Failed to fetch reviews",
-//       error: error.message,
-//     });
-//   }
-// };
 
 export const toggleReviewFrontStatus = async (req, res) => {
   const { id } = req.params;

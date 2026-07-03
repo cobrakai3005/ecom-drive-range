@@ -5,6 +5,7 @@ import {
   getAllProducts,
   getProductByIdOrSlug,
   toggleProductStatus,
+  getVehicleProducts,
   updateProduct,
 } from "../controllers/product.controller.js";
 import verifyToken from "../middlewares/auth.middleware.js";
@@ -13,6 +14,7 @@ import upload from "../middlewares/multer.middleware.js";
 const router = express.Router();
 
 router.get("/get_all_products", getAllProducts);
+router.get("/get_all_vehicle_products", getVehicleProducts);
 router.get("/get_product_by_id/:identifier", getProductByIdOrSlug);
 router.post(
   "/create_product",

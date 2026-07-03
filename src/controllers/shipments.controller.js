@@ -109,21 +109,6 @@ export const getAllShipments = async (req, res) => {
   }
 };
 
-// 3. GET BY ID
-// export const getShipmentById = async (req, res) => {
-//   const { id } = req.params;
-//   try {
-//     const [rows] = await pool.query("SELECT * FROM shipments WHERE id = ?", [
-//       id,
-//     ]);
-//     if (rows.length === 0)
-//       return res.status(404).json({ message: "Shipment not found" });
-//     res.json(rows[0]);
-//   } catch (error) {
-//     res.status(500).json({ error: error.message });
-//   }
-// };
-
 export const getShipmentById = async (req, res) => {
   const { id } = req.params;
   try {

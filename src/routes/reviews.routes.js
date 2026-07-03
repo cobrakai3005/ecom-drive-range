@@ -8,6 +8,7 @@ import {
   getAllReviews,
   deleteReview,
   updateReview,
+  getMyReviews,
   toggleReviewFrontStatus,
   deleteReviewImages,
   getFeaturedReviews,
@@ -46,7 +47,9 @@ router.put(
   },
   updateReview,
 );
+
 router.get("/product/:productId", getProductReviews); // public
+router.get("/my-reviews", verifyToken, authorize("Customer"), getMyReviews);
 router.get(
   "/admin/all",
   verifyToken,
