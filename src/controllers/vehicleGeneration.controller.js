@@ -55,7 +55,6 @@ export const getAllGenerations = async (req, res) => {
       JOIN vehicle_models m ON g.model_id = m.id
       JOIN vehicle_makes mk ON m.make_id = mk.id
       WHERE ${whereClause}
-     
         ORDER BY  created_at DESC, mk.name ASC, m.name ASC, g.year_from ASC
       LIMIT ? OFFSET ?
     `;

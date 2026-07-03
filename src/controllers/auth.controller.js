@@ -211,7 +211,7 @@ export const resendOtp = async (req, res) => {
     if (!email) {
       return res.status(400).json({
         success: false,
-        message: "Phone number is required",
+        message: "Email number is required",
       });
     }
 
@@ -265,36 +265,29 @@ export const resendOtp = async (req, res) => {
 export const verifyOTP = async (req, res) => {
   try {
     console.log(req?.body);
-    const { phone, otp } = req?.body;
+    const { email, otp } = req?.body;
 
-    if (!phone || !otp) {
+    if (!email || !otp) {
       return res.status(400).json({
         message: "All fields are required",
         success: false,
       });
     }
 
-    if (phone.length !== 10) {
-      return res.status(400).json({
-        message: `Phone number must be 10 digits`,
-        success: false,
-      });
-    }
-
-    const [userRows] = await pool.query(`SELECT * FROM users WHERE phone = ?`, [
-      phone,
+    const [userRows] = await pool.query(`SELECT * FROM users WHERE email = ?`, [
+      email,
     ]);
 
     if (userRows.length <= 0) {
       return res.status(400).json({
-        message: "User not found with this number",
+        message: "User not found with this email",
         success: false,
       });
     }
 
     const existingUser = userRows[0];
 
-    console.log(existingUser);
+    console.log(`existingUser`);
     console.log(otp);
 
     // const existingUser = userRows[0];
@@ -312,9 +305,6 @@ export const verifyOTP = async (req, res) => {
       });
     }
 
-    console.log(existingUser);
-    console.log(Date(Date.now()));
-
     // Compare expiry (MySQL datetime vs JS Date)
     if (new Date(existingUser.otp_expire) < new Date()) {
       return res.status(400).json({
@@ -328,8 +318,8 @@ export const verifyOTP = async (req, res) => {
    SET otp_verify = true,
        otp = NULL,
        otp_expire = NULL
-   WHERE phone = ?`,
-      [phone],
+   WHERE email = ?`,
+      [email],
     );
 
     res.status(200).json({
