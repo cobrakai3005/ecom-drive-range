@@ -147,6 +147,7 @@ export const getMyReviews = async (req, res) => {
         r.order_item_id,
         r.rating,
         r.review,
+        r.images,
         r.is_verified_purchase,
         r.status,
         r.created_at,
@@ -241,6 +242,7 @@ export const getProductReviews = async (req, res) => {
           r.order_item_id,
           r.rating,
           r.review,
+          r.images,
           r.is_verified_purchase,
           r.status,
           r.created_at,
@@ -258,6 +260,7 @@ export const getProductReviews = async (req, res) => {
        LIMIT ? OFFSET ?`,
       [productId, limit, offset],
     );
+   
 
     res.json({
       success: true,

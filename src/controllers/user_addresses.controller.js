@@ -305,35 +305,7 @@ export const updateAddress = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error update" });
   }
 };
-// export const deleteAddress = async (req, res) => {
-//   try {
-//     const { addressId } = req.params;
-//     const { role, id: userId } = req.user;
 
-//     const [existing] = await pool.query(
-//       "SELECT user_id FROM user_addresses WHERE id = ? AND is_deleted = FALSE",
-//       [addressId],
-//     );
-//     console.log(existing);
-
-//     if (existing.length === 0) {
-//       return res
-//         .status(404)
-//         .json({ success: false, message: "Address not found" });
-//     }
-//     if (role === "Customer" && existing[0].user_id !== userId) {
-//       return res.status(403).json({ success: false, message: "Forbidden" });
-//     }
-
-//     await pool.query(
-//       "UPDATE user_addresses SET is_deleted = TRUE WHERE id = ?",
-//       [addressId],
-//     );
-//     res.json({ success: true, message: "Address deleted" });
-//   } catch (error) {
-//     res.status(500).json({ success: false, message: "Server error" });
-//   }
-// };
 export const deleteAddress = async (req, res) => {
   try {
     const { addressId } = req.params;
