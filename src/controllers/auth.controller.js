@@ -156,26 +156,68 @@ export const login = async (req, res) => {
     const userId = existingUser.id;
     const sessionToken = req.headers["x-session-token"] || null;
 
-    if (sessionToken) {
-      // Fetch Cart
+    const userId = existingUser.id;
+    const sessionToken = req.headers["x-session-token"] || null;
 
-      if (sessionToken) {
-        // Check if guest cart exists
-        const [guestCart] = await pool.query(
-          "SELECT id FROM cart WHERE session_token = ? LIMIT 1",
-          [sessionToken],
+    if (sessionToken) {
+      const [guestCartRows] = await pool.query(
+        `SELECT * FROM cart WHERE session_token = ?`,
+        [sessionToken],
+      );
+
+      if (guestCartRows.length) {
+        const guestCart = guestCartRows[0];
+
+        const guestItems =
+          typeof guestCart.items === "string"
+            ? JSON.parse(guestCart.items || "[]")
+            : guestCart.items || [];
+
+        const [userCartRows] = await pool.query(
+          `SELECT * FROM cart WHERE user_id = ?`,
+          [userId],
         );
 
-        if (guestCart.length) {
-          // If user already has a cart, delete it (or handle differently if needed)
-          await pool.query("DELETE FROM cart WHERE user_id = ?", [userId]);
+        if (userCartRows.length) {
+          const userCart = userCartRows[0];
 
-          // Assign guest cart to the user
+          const userItems =
+            typeof userCart.items === "string"
+              ? JSON.parse(userCart.items || "[]")
+              : userCart.items || [];
+
+          // Merge items
+          const mergedItems = [...userItems];
+
+          for (const guestItem of guestItems) {
+            const existingItem = mergedItems.find(
+              (item) =>
+                Number(item.product_id) === Number(guestItem.product_id),
+            );
+
+            if (existingItem) {
+              existingItem.quantity =
+                Number(existingItem.quantity) + Number(guestItem.quantity);
+            } else {
+              mergedItems.push(guestItem);
+            }
+          }
+
+          // Update user cart
+          await pool.query(`UPDATE cart SET items = ? WHERE id = ?`, [
+            JSON.stringify(mergedItems),
+            userCart.id,
+          ]);
+
+          // Delete guest cart
+          await pool.query(`DELETE FROM cart WHERE id = ?`, [guestCart.id]);
+        } else {
+          // No user cart exists, convert guest cart into user cart
           await pool.query(
             `UPDATE cart
-       SET user_id = ?, session_token = NULL
-       WHERE id = ?`,
-            [userId, guestCart[0].id],
+         SET user_id = ?, session_token = NULL
+         WHERE id = ?`,
+            [userId, guestCart.id],
           );
         }
       }
