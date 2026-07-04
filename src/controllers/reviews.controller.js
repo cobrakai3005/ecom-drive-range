@@ -260,7 +260,6 @@ export const getProductReviews = async (req, res) => {
        LIMIT ? OFFSET ?`,
       [productId, limit, offset],
     );
-   
 
     res.json({
       success: true,
@@ -437,7 +436,9 @@ export const deleteReview = async (req, res) => {
       });
     }
 
-    const images = reviews[0].images ? JSON.parse(reviews[0].images) : [];
+    const images = Array.isArray(reviews[0].images)
+      ? reviews[0].images
+      : JSON.parse(reviews[0].images || "[]");
 
     // Delete Cloudinary images
     await Promise.all(
