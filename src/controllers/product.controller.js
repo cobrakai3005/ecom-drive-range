@@ -64,27 +64,28 @@ export const getAllProducts = async (req, res) => {
     let whereClauses = [];
 
     if (search) {
-      whereClauses.push("(name LIKE ? OR sku LIKE ?)");
+      ``;
+      whereClauses.push("(p.name LIKE ? OR p.sku LIKE ?)");
       params.push(`%${search}%`, `%${search}%`);
     }
     if (category_id) {
-      whereClauses.push("category_id = ?");
+      whereClauses.push("p.category_id = ?");
       params.push(category_id);
     }
     if (brand_id) {
-      whereClauses.push("brand_id = ?");
+      whereClauses.push("p.brand_id = ?");
       params.push(brand_id);
     }
     if (status) {
-      whereClauses.push("status = ?");
+      whereClauses.push("p.status = ?");
       params.push(status);
     }
     if (is_featured !== undefined) {
-      whereClauses.push("is_featured = ?");
+      whereClauses.push("p.is_featured = ?");
       params.push(is_featured);
     }
     if (is_front !== undefined) {
-      whereClauses.push("is_front = ?");
+      whereClauses.push("p.is_front = ?");
       params.push(is_front);
     }
 
@@ -94,14 +95,14 @@ export const getAllProducts = async (req, res) => {
 
     // Count total
     const [countResult] = await pool.query(
-      `SELECT COUNT(*) as total FROM product ${whereSQL}`,
+      `SELECT COUNT(*) as total FROM product p ${whereSQL}`,
       params,
     );
     const total = countResult[0]?.total || 0;
 
     // Fetch products
     const [products] = await pool.query(
-      `SELECT * FROM product ${whereSQL} ORDER BY ${sort} LIMIT ? OFFSET ?`,
+      `SELECT p.*, br.name as brand_name FROM product p LEFT JOIN brands br ON p.brand_id = br.id ${whereSQL} ORDER BY ${sort} LIMIT ? OFFSET ?`,
       [...params, parseInt(limit), parseInt(offset)],
     );
 
@@ -132,9 +133,12 @@ export const getProductByIdOrSlug = async (req, res) => {
     const { identifier } = req.params;
     const isNumeric = !isNaN(identifier);
 
-    const field = isNumeric ? "id" : "slug";
+    const field = isNumeric ? "p.id" : "p.slug";
     const [rows] = await pool.query(
-      `SELECT * FROM product WHERE ${field} = ?`,
+      `SELECT p.* , br.name  brand_name
+       FROM product p
+       LEFT JOIN brands br ON p.brand_id = br.id
+       WHERE ${field} = ?`,
       [identifier],
     );
 
