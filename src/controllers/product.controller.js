@@ -710,7 +710,7 @@ export const getVehicleProducts = async (req, res, next) => {
     //    We'll conditionally append WHERE clauses.
     let sql = `
       SELECT DISTINCT p.*
-      FROM products p
+      FROM product p
       INNER JOIN product_vehicle_compatibility pvc ON p.id = pvc.product_id
       INNER JOIN vehicle_generations vg ON pvc.vehicle_generation_id = vg.id
       INNER JOIN vehicle_models vm ON vg.model_id = vm.id
@@ -743,7 +743,7 @@ export const getVehicleProducts = async (req, res, next) => {
     // 4. Count query (total matching products)
     const countSql = `
       SELECT COUNT(DISTINCT p.id) AS total
-      FROM products p
+      FROM product p
       INNER JOIN product_vehicle_compatibility pvc ON p.id = pvc.product_id
       INNER JOIN vehicle_generations vg ON pvc.vehicle_generation_id = vg.id
       INNER JOIN vehicle_models vm ON vg.model_id = vm.id
