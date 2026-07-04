@@ -215,6 +215,8 @@ export const getMyWarrantyItems = async (req, res) => {
   }
 };
 
+
+
 export const claimWarranty = async (req, res) => {
   const userId = req.user.id;
   const { orderItemId } = req.params;

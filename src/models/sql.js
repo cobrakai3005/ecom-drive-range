@@ -671,8 +671,8 @@ CREATE TABLE IF NOT EXISTS product (
     is_featured BOOLEAN DEFAULT TRUE,
     is_front BOOLEAN DEFAULT TRUE,
     available_stock INT NOT NULL DEFAULT 0,
-    item_created_at TIMESTAMP,
-    item_updated_at TIMESTAMP
+    product_created_at TIMESTAMP,
+    product_updated_at TIMESTAMP
 );
 
 

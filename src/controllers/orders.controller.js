@@ -619,32 +619,6 @@ export const verifyRazorpayAndCreateOrder = async (req, res) => {
   }
 };
 
-// export const getOrderDetails = async (req, res) => {
-//   const { id } = req.params;
-//   const userId = req.user.id;
-//   console.log(userId);
-
-//   try {
-//     const [orderRows] = await pool.query(
-//       `SELECT * FROM orders WHERE id = ? AND user_id = ?`,
-//       [id, userId],
-//     );
-//     if (orderRows.length === 0) {
-//       return res
-//         .status(404)
-//         .json({ success: false, message: "Order not found" });
-//     }
-//     const [items] = await pool.query(
-//       `SELECT id, product_id, quantity, unit_price, total_price, product_data_snapshot
-//              FROM order_items WHERE order_id = ?`,
-//       [id],
-//     );
-//     res.json({ success: true, data: { ...orderRows[0], items } });
-//   } catch (error) {
-//     console.error(error);
-//     res.status(500).json({ success: false, message: "Server error" });
-//   }
-// };
 // ========== GET all orders for logged-in user ==========
 
 export const getOrderDetails = async (req, res) => {
@@ -664,16 +638,56 @@ export const getOrderDetails = async (req, res) => {
       });
     }
 
+    // const [items] = await pool.query(
+    //   `SELECT
+    //     id,
+    //     product_id,
+    //     quantity,
+    //     unit_price,
+    //     total_price,
+    //     product_data_snapshot
+    //    FROM order_items
+    //    WHERE order_id = ?`,
+    //   [id],
+    // );
+
     const [items] = await pool.query(
-      `SELECT 
-        id,
-        product_id,
-        quantity,
-        unit_price,
-        total_price,
-        product_data_snapshot
-       FROM order_items
-       WHERE order_id = ?`,
+      `
+  SELECT
+    oi.id,
+    oi.product_id,
+    oi.quantity,
+    oi.claimed_quantity,
+    oi.warranty_claimed_at,
+    oi.unit_price,
+    oi.total_price,
+    oi.product_data_snapshot,
+
+    p.warranty_months,
+
+    o.delivered_at,
+    o.order_status,
+
+    DATE_ADD(o.delivered_at, INTERVAL p.warranty_months MONTH) AS warranty_end_date,
+
+    CASE
+      WHEN p.warranty_months IS NULL THEN 'no_warranty'
+      WHEN o.delivered_at IS NULL THEN 'not_delivered'
+      WHEN CURDATE() > DATE_ADD(o.delivered_at, INTERVAL p.warranty_months MONTH)
+        THEN 'expired'
+      WHEN oi.claimed_quantity > 0
+        THEN 'claimed'
+      ELSE 'active'
+    END AS warranty_status
+
+  FROM order_items oi
+  JOIN orders o
+    ON oi.order_id = o.id
+  JOIN product p
+    ON oi.product_id = p.id
+
+  WHERE oi.order_id = ?
+  `,
       [id],
     );
 
@@ -727,6 +741,7 @@ export const getUserOrders = async (req, res) => {
              ORDER BY order_date DESC`,
       [userId],
     );
+
     res.json({ success: true, data: orders });
   } catch (error) {
     console.error(error);

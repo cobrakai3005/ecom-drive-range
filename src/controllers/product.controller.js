@@ -45,6 +45,88 @@ const getProductMedia = async (productId) => {
 
 // GET /api/products
 // Query params: page, limit, search, category, brand, status, is_featured, is_front
+// export const getAllProducts = async (req, res) => {
+//   try {
+//     const {
+//       page = 1,
+//       limit = 10,
+//       search = "",
+//       category_id,
+//       brand_id,
+//       status,
+//       is_featured,
+//       is_front,
+//       sort = "product_created_at DESC",
+//     } = req.query;
+
+//     const offset = (page - 1) * limit;
+//     const params = [];
+//     let whereClauses = [];
+
+//     if (search) {
+//       ``;
+//       whereClauses.push("(p.name LIKE ? OR p.sku LIKE ?)");
+//       params.push(`%${search}%`, `%${search}%`);
+//     }
+//     if (category_id) {
+//       whereClauses.push("p.category_id = ?");
+//       params.push(category_id);
+//     }
+//     if (brand_id) {
+//       whereClauses.push("p.brand_id = ?");
+//       params.push(brand_id);
+//     }
+//     if (status) {
+//       whereClauses.push("p.status = ?");
+//       params.push(status);
+//     }
+//     if (is_featured !== undefined) {
+//       whereClauses.push("p.is_featured = ?");
+//       params.push(is_featured);
+//     }
+//     if (is_front !== undefined) {
+//       whereClauses.push("p.is_front = ?");
+//       params.push(is_front);
+//     }
+
+//     const whereSQL = whereClauses.length
+//       ? `WHERE ${whereClauses.join(" AND ")}`
+//       : "";
+
+//     // Count total
+//     const [countResult] = await pool.query(
+//       `SELECT COUNT(*) as total FROM product p ${whereSQL}`,
+//       params,
+//     );
+//     const total = countResult[0]?.total || 0;
+
+//     // Fetch products
+//     const [products] = await pool.query(
+//       `SELECT p.*, br.name as brand_name FROM product p LEFT JOIN brands br ON p.brand_id = br.id ${whereSQL} ORDER BY ${sort} LIMIT ? OFFSET ?`,
+//       [...params, parseInt(limit), parseInt(offset)],
+//     );
+
+//     // Fetch media for each product
+//     for (let product of products) {
+//       product.media = await getProductMedia(product.id);
+//     }
+
+//     res.status(200).json({
+//       success: true,
+//       data: products,
+//       pagination: {
+//         total,
+//         page: parseInt(page),
+//         limit: parseInt(limit),
+//         totalPages: Math.ceil(total / limit),
+//       },
+//     });
+//   } catch (error) {
+//     console.error("Error in getAllProducts:", error);
+//     res.status(500).json({ success: false, message: "Internal server error" });
+//   }
+// };
+
 export const getAllProducts = async (req, res) => {
   try {
     const {
@@ -56,7 +138,7 @@ export const getAllProducts = async (req, res) => {
       status,
       is_featured,
       is_front,
-      sort = "product_created_at DESC",
+      sort_by = "latest",
     } = req.query;
 
     const offset = (page - 1) * limit;
@@ -64,26 +146,30 @@ export const getAllProducts = async (req, res) => {
     let whereClauses = [];
 
     if (search) {
-      ``;
       whereClauses.push("(p.name LIKE ? OR p.sku LIKE ?)");
       params.push(`%${search}%`, `%${search}%`);
     }
+
     if (category_id) {
       whereClauses.push("p.category_id = ?");
       params.push(category_id);
     }
+
     if (brand_id) {
       whereClauses.push("p.brand_id = ?");
       params.push(brand_id);
     }
+
     if (status) {
       whereClauses.push("p.status = ?");
       params.push(status);
     }
+
     if (is_featured !== undefined) {
       whereClauses.push("p.is_featured = ?");
       params.push(is_featured);
     }
+
     if (is_front !== undefined) {
       whereClauses.push("p.is_front = ?");
       params.push(is_front);
@@ -93,21 +179,49 @@ export const getAllProducts = async (req, res) => {
       ? `WHERE ${whereClauses.join(" AND ")}`
       : "";
 
-    // Count total
+    // Safe sorting
+    const sortOptions = {
+      latest: "p.product_created_at DESC",
+      oldest: "p.product_created_at ASC",
+      price_low_high: "p.price ASC",
+      price_high_low: "p.price DESC",
+      name_az: "p.name ASC",
+      name_za: "p.name DESC",
+      stock_low_high: "p.available_stock ASC",
+      stock_high_low: "p.available_stock DESC",
+      featured: "p.is_featured DESC, p.created_at DESC",
+    };
+
+    const orderBy = sortOptions[sort_by] || sortOptions.latest;
+
+    // Count
     const [countResult] = await pool.query(
-      `SELECT COUNT(*) as total FROM product p ${whereSQL}`,
-      params,
+      `SELECT COUNT(*) AS total
+       FROM product p
+       ${whereSQL}`,
+      params
     );
-    const total = countResult[0]?.total || 0;
 
-    // Fetch products
+    const total = countResult[0].total;
+
+    // Products
     const [products] = await pool.query(
-      `SELECT p.*, br.name as brand_name FROM product p LEFT JOIN brands br ON p.brand_id = br.id ${whereSQL} ORDER BY ${sort} LIMIT ? OFFSET ?`,
-      [...params, parseInt(limit), parseInt(offset)],
+      `
+      SELECT
+        p.*,
+        br.name AS brand_name
+      FROM product p
+      LEFT JOIN brands br
+        ON p.brand_id = br.id
+      ${whereSQL}
+      ORDER BY ${orderBy}
+      LIMIT ?
+      OFFSET ?
+      `,
+      [...params, Number(limit), Number(offset)]
     );
 
-    // Fetch media for each product
-    for (let product of products) {
+    for (const product of products) {
       product.media = await getProductMedia(product.id);
     }
 
@@ -116,14 +230,17 @@ export const getAllProducts = async (req, res) => {
       data: products,
       pagination: {
         total,
-        page: parseInt(page),
-        limit: parseInt(limit),
+        page: Number(page),
+        limit: Number(limit),
         totalPages: Math.ceil(total / limit),
       },
     });
   } catch (error) {
     console.error("Error in getAllProducts:", error);
-    res.status(500).json({ success: false, message: "Internal server error" });
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
   }
 };
 
