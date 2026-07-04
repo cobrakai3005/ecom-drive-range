@@ -775,6 +775,11 @@ export const getVehicleProducts = async (req, res, next) => {
     // 7. Execute data query
     const [dataRows] = await pool.query(dataSql, dataParams);
 
+    // Fetch media for each product
+    for (let product of dataRows) {
+      product.media = await getProductMedia(product.id);
+    }
+
     // 8. Send response
     res.json({
       data: dataRows,
