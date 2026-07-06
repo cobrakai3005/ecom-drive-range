@@ -114,7 +114,7 @@ export const login = async (req, res) => {
     if (!existingUser.otp_verify) {
       return res.status(400).json({
         success: false,
-        message: "Please verify your phone number first",
+        message: "Please verify your Email  first",
       });
     }
 
@@ -251,7 +251,7 @@ export const resendOtp = async (req, res) => {
     if (!email) {
       return res.status(400).json({
         success: false,
-        message: "Email number is required",
+        message: "Email  is required",
       });
     }
 
