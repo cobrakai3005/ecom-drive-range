@@ -274,7 +274,7 @@ export const resendOtp = async (req, res) => {
     }
 
     const otp = generateOtp();
-    const otpExpire = new Date(Date.now() + 5 * 60 * 1000);
+    const otpExpire = new Date(Date.now() + 1 * 60 * 1000);
 
     await pool.query(
       `UPDATE users SET otp = ?, otp_expire = ? WHERE email = ?`,
@@ -287,12 +287,12 @@ export const resendOtp = async (req, res) => {
       [email],
     );
     // Send OTP email
-    await sendOTPEmail(email, otp);
     res.status(201).json({
       message: `OTP resent successfully to ${email}`,
       success: true,
       data: updatedRows[0],
     });
+    await sendOTPEmail(email, otp);
   } catch (error) {
     console.log(error);
     return res.status(500).json({
