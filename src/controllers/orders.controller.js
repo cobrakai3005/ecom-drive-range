@@ -638,19 +638,6 @@ export const getOrderDetails = async (req, res) => {
       });
     }
 
-    // const [items] = await pool.query(
-    //   `SELECT
-    //     id,
-    //     product_id,
-    //     quantity,
-    //     unit_price,
-    //     total_price,
-    //     product_data_snapshot
-    //    FROM order_items
-    //    WHERE order_id = ?`,
-    //   [id],
-    // );
-
     const [items] = await pool.query(
       `
   SELECT

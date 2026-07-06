@@ -403,7 +403,7 @@ export const updateProfile = async (req, res) => {
 export const changePassword = async (req, res) => {
   try {
     console.log(req.body);
-    
+
     const userId = req.user.id;
     const { currentPassword, newPassword, confirmPassword } = req.body;
 
@@ -415,10 +415,10 @@ export const changePassword = async (req, res) => {
       });
     }
 
-    if (newPassword.length < 6) {
+    if (newPassword.length < 6 || newPassword.length > 10) {
       return res.status(400).json({
+        message: `Password length must be at least 6 characters or maximum 10 characters`,
         success: false,
-        message: "New password must be at least 6 characters long.",
       });
     }
 

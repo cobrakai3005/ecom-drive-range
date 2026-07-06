@@ -19,9 +19,9 @@ export const registerController = async (req, res) => {
       });
     }
 
-    if (password.length < 6) {
+    if (password.length < 6 || password.length > 10) {
       return res.status(400).json({
-        message: `Password length must be at least 6 characters`,
+        message: `Password length must be at least 6 characters or maximum 10 characters`,
         success: false,
       });
     }
