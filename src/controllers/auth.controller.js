@@ -3,7 +3,7 @@ import { generateOtp } from "../lib/otp.js";
 import jwt from "jsonwebtoken";
 import cloudinary from "../config/cloudinary.js";
 import { sendOTPEmail } from "../services/nodemailer.service.js";
-const fiveMinutes = 5 * 60 * 1000;
+const fiveMinutes = 1 * 60 * 1000;
 
 export const getMe = (req, res) => {
   return res.json(req.user);
