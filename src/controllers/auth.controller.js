@@ -111,6 +111,14 @@ export const login = async (req, res) => {
 
     const existingUser = userRows[0];
 
+    const isMatch = password === existingUser.password;
+    if (!isMatch) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid credentials",
+      });
+    }
+
     if (!existingUser.otp_verify) {
       return res.status(400).json({
         success: false,
@@ -122,14 +130,6 @@ export const login = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "You can't do this operation Because Admin Deactivate you",
-      });
-    }
-
-    const isMatch = password === existingUser.password;
-    if (!isMatch) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid credentials",
       });
     }
 
