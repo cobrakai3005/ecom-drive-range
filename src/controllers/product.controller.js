@@ -526,22 +526,15 @@ export const updateProduct = async (req, res) => {
 
     // ---------- UPDATE VEHICLE COMPATIBILITY ----------
 
-    // Remove existing compatibility
-    //   await connection.query(
-    //     `DELETE FROM product_vehicle_compatibility
-    //  WHERE product_id = ?`,
-    //     [productId],
-    //   );
-
+  
     if (
       Array.isArray(vehicle_generation_ids) &&
       vehicle_generation_ids.length > 0
     ) {
-      const uniqueIds = [...new Set(vehicle_generation_ids)];
+      const uniqueIds = [...new Set(vehicle_generation_ids.map(Number))];
 
       const placeholders = uniqueIds.map(() => "?").join(",");
 
-      // Validate IDs
       const [generations] = await connection.query(
         `SELECT id
      FROM vehicle_generations
@@ -550,7 +543,7 @@ export const updateProduct = async (req, res) => {
       );
 
       if (generations.length !== uniqueIds.length) {
-        const foundIds = generations.map((g) => g.id);
+        const foundIds = generations.map((g) => Number(g.id));
 
         const invalidIds = uniqueIds.filter((id) => !foundIds.includes(id));
 
@@ -562,18 +555,34 @@ export const updateProduct = async (req, res) => {
         });
       }
 
-      const compatibilityValues = uniqueIds.map((generationId) => [
-        productId,
-        generationId,
-        null,
-      ]);
-
-      await connection.query(
-        `INSERT INTO product_vehicle_compatibility
-      (product_id, vehicle_generation_id, compatibility_notes)
-      VALUES ?`,
-        [compatibilityValues],
+      const [existingRows] = await connection.query(
+        `SELECT vehicle_generation_id
+     FROM product_vehicle_compatibility
+     WHERE product_id = ?
+     AND vehicle_generation_id IN (${placeholders})`,
+        [productId, ...uniqueIds],
       );
+
+      const existingIds = existingRows.map((row) =>
+        Number(row.vehicle_generation_id),
+      );
+
+      const newIds = uniqueIds.filter((id) => !existingIds.includes(id));
+
+      if (newIds.length > 0) {
+        const compatibilityValues = newIds.map((generationId) => [
+          productId,
+          generationId,
+          null,
+        ]);
+
+        await connection.query(
+          `INSERT INTO product_vehicle_compatibility
+       (product_id, vehicle_generation_id, compatibility_notes)
+       VALUES ?`,
+          [compatibilityValues],
+        );
+      }
     }
 
     await connection.commit();
@@ -584,7 +593,7 @@ export const updateProduct = async (req, res) => {
       [id],
     );
 
-    const [compatibility] = await pool.query(
+    const [compatibility] = await connection.query(
       `SELECT
       pvc.id,
       pvc.compatibility_notes,
