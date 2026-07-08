@@ -15,9 +15,11 @@ export const getAllCategories = async (req, res) => {
     const params = [];
 
     // Status filter (only if provided)
+    whereConditions.push("status = ?");
     if (status && ["active", "inactive"].includes(status)) {
-      whereConditions.push("status = ?");
       params.push(status);
+    } else {
+      params.push("active");
     }
 
     // is_front filter (only if provided)
@@ -160,8 +162,6 @@ export const updateCategory = async (req, res) => {
 
     const { name, description, status, is_front } = req.body; // Removed display_order
     let image_url = existing[0]?.image_url; // keep old by default
-
-   
 
     // If new file uploaded, use its URL
     if (req.file) {
