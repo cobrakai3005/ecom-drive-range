@@ -53,6 +53,7 @@ export const getAllProducts = async (req, res) => {
       limit = 10,
       search = "",
       category_id,
+      sub_category_id,
       brand_id,
       status,
       is_featured,
@@ -72,6 +73,10 @@ export const getAllProducts = async (req, res) => {
     if (category_id) {
       whereClauses.push("p.category_id = ?");
       params.push(category_id);
+    }
+    if (sub_category_id) {
+      whereClauses.push("p.category_id = ?");
+      params.push(sub_category_id);
     }
 
     if (brand_id) {
@@ -526,7 +531,6 @@ export const updateProduct = async (req, res) => {
 
     // ---------- UPDATE VEHICLE COMPATIBILITY ----------
 
-  
     if (
       Array.isArray(vehicle_generation_ids) &&
       vehicle_generation_ids.length > 0
