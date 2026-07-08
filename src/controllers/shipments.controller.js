@@ -221,6 +221,74 @@ export const updateShipment = async (req, res) => {
 };
 
 // 5. UPDATE STATUS ONLY
+// export const updateStatus = async (req, res) => {
+//   const { id } = req.params;
+//   const { status } = req.body;
+
+//   const allowedStatuses = [
+//     "pending",
+//     "assigned",
+//     "picked_up",
+//     "in_transit",
+//     "out_for_delivery",
+//     "delivered",
+//     "failed",
+//     "returned",
+//     "cancelled",
+//   ];
+
+//   if (!status) {
+//     return res.status(400).json({
+//       success: false,
+//       message: "Status is required",
+//     });
+//   }
+
+//   if (!allowedStatuses.includes(status)) {
+//     return res.status(400).json({
+//       success: false,
+//       message: `Invalid status. Allowed statuses are: ${allowedStatuses.join(", ")}`,
+//     });
+//   }
+
+//   try {
+//     const systemEvent = {
+//       event: `Status changed to ${status}`,
+//       timestamp: new Date().toISOString(),
+//     };
+
+//     const [result] = await pool.query(
+//       `UPDATE shipments
+//        SET current_status = ?,
+//            tracking_history = JSON_ARRAY_APPEND(
+//              IFNULL(tracking_history, JSON_ARRAY()),
+//              '$',
+//              CAST(? AS JSON)
+//            )
+//        WHERE id = ?`,
+//       [status, JSON.stringify(systemEvent), id],
+//     );
+
+//     if (result.affectedRows === 0) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "Shipment not found",
+//       });
+//     }
+
+//     res.json({
+//       success: true,
+//       message: `Status updated to ${status}`,
+//     });
+//   } catch (error) {
+//     console.error(error);
+//     res.status(500).json({
+//       success: false,
+//       message: error.message,
+//     });
+//   }
+// };
+
 export const updateStatus = async (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
@@ -237,6 +305,18 @@ export const updateStatus = async (req, res) => {
     "cancelled",
   ];
 
+  const statusEventMap = {
+    pending: "Shipment pending",
+    assigned: "Courier assigned",
+    picked_up: "Package picked up",
+    in_transit: "Package in transit",
+    out_for_delivery: "Out for delivery",
+    delivered: "Delivered",
+    failed: "Delivery failed",
+    returned: "Returned",
+    cancelled: "Cancelled",
+  };
+
   if (!status) {
     return res.status(400).json({
       success: false,
@@ -252,33 +332,54 @@ export const updateStatus = async (req, res) => {
   }
 
   try {
-    const systemEvent = {
-      event: `Status changed to ${status}`,
-      timestamp: new Date().toISOString(),
-    };
-
-    const [result] = await pool.query(
-      `UPDATE shipments
-       SET current_status = ?,
-           tracking_history = JSON_ARRAY_APPEND(
-             IFNULL(tracking_history, JSON_ARRAY()),
-             '$',
-             CAST(? AS JSON)
-           )
+    const [rows] = await pool.query(
+      `SELECT current_status, tracking_history
+       FROM shipments
        WHERE id = ?`,
-      [status, JSON.stringify(systemEvent), id],
+      [id],
     );
 
-    if (result.affectedRows === 0) {
+    if (!rows.length) {
       return res.status(404).json({
         success: false,
         message: "Shipment not found",
       });
     }
 
+    let trackingHistory = rows[0].tracking_history || [];
+
+    if (typeof trackingHistory === "string") {
+      trackingHistory = JSON.parse(trackingHistory);
+    }
+
+    if (!Array.isArray(trackingHistory)) {
+      trackingHistory = [];
+    }
+
+    const alreadyExists = trackingHistory.some(
+      (item) => item.event === statusEventMap[status],
+    );
+
+    if (!alreadyExists) {
+      trackingHistory.push({
+        event: statusEventMap[status],
+        date: new Date().toISOString(),
+      });
+    }
+
+    await pool.query(
+      `UPDATE shipments
+       SET current_status = ?,
+           tracking_history = ?
+       WHERE id = ?`,
+      [status, JSON.stringify(trackingHistory), id],
+    );
+
     res.json({
       success: true,
-      message: `Status updated to ${status}`,
+      message: alreadyExists
+        ? `Status updated to ${status}, no duplicate tracking added`
+        : `Status updated to ${status}`,
     });
   } catch (error) {
     console.error(error);

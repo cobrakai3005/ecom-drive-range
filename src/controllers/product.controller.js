@@ -45,87 +45,6 @@ const getProductMedia = async (productId) => {
 
 // GET /api/products
 // Query params: page, limit, search, category, brand, status, is_featured, is_front
-// export const getAllProducts = async (req, res) => {
-//   try {
-//     const {
-//       page = 1,
-//       limit = 10,
-//       search = "",
-//       category_id,
-//       brand_id,
-//       status,
-//       is_featured,
-//       is_front,
-//       sort = "product_created_at DESC",
-//     } = req.query;
-
-//     const offset = (page - 1) * limit;
-//     const params = [];
-//     let whereClauses = [];
-
-//     if (search) {
-//       ``;
-//       whereClauses.push("(p.name LIKE ? OR p.sku LIKE ?)");
-//       params.push(`%${search}%`, `%${search}%`);
-//     }
-//     if (category_id) {
-//       whereClauses.push("p.category_id = ?");
-//       params.push(category_id);
-//     }
-//     if (brand_id) {
-//       whereClauses.push("p.brand_id = ?");
-//       params.push(brand_id);
-//     }
-//     if (status) {
-//       whereClauses.push("p.status = ?");
-//       params.push(status);
-//     }
-//     if (is_featured !== undefined) {
-//       whereClauses.push("p.is_featured = ?");
-//       params.push(is_featured);
-//     }
-//     if (is_front !== undefined) {
-//       whereClauses.push("p.is_front = ?");
-//       params.push(is_front);
-//     }
-
-//     const whereSQL = whereClauses.length
-//       ? `WHERE ${whereClauses.join(" AND ")}`
-//       : "";
-
-//     // Count total
-//     const [countResult] = await pool.query(
-//       `SELECT COUNT(*) as total FROM product p ${whereSQL}`,
-//       params,
-//     );
-//     const total = countResult[0]?.total || 0;
-
-//     // Fetch products
-//     const [products] = await pool.query(
-//       `SELECT p.*, br.name as brand_name FROM product p LEFT JOIN brands br ON p.brand_id = br.id ${whereSQL} ORDER BY ${sort} LIMIT ? OFFSET ?`,
-//       [...params, parseInt(limit), parseInt(offset)],
-//     );
-
-//     // Fetch media for each product
-//     for (let product of products) {
-//       product.media = await getProductMedia(product.id);
-//     }
-
-//     res.status(200).json({
-//       success: true,
-//       data: products,
-//       pagination: {
-//         total,
-//         page: parseInt(page),
-//         limit: parseInt(limit),
-//         totalPages: Math.ceil(total / limit),
-//       },
-//     });
-//   } catch (error) {
-//     console.error("Error in getAllProducts:", error);
-//     res.status(500).json({ success: false, message: "Internal server error" });
-//   }
-// };
 
 export const getAllProducts = async (req, res) => {
   try {
@@ -199,7 +118,7 @@ export const getAllProducts = async (req, res) => {
       `SELECT COUNT(*) AS total
        FROM product p
        ${whereSQL}`,
-      params
+      params,
     );
 
     const total = countResult[0].total;
@@ -218,7 +137,7 @@ export const getAllProducts = async (req, res) => {
       LIMIT ?
       OFFSET ?
       `,
-      [...params, Number(limit), Number(offset)]
+      [...params, Number(limit), Number(offset)],
     );
 
     for (const product of products) {
@@ -304,7 +223,7 @@ export const createProduct = async (req, res) => {
       tax_percentage,
       available_stock,
       active,
-
+      is_universal,
       vehicle_generation_ids = [], // 👈 add this
     } = req.body;
     const warranty_months =
@@ -330,8 +249,8 @@ export const createProduct = async (req, res) => {
     short_description, long_description, seo_title, seo_description, seo_keywords,
     sku, price, weight, width, height, depth,
     is_available, is_featured, is_front, available_stock,
-    status, product_created_at, product_updated_at,warranty_months,tax_percentage
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), ?, ?)`,
+    status, product_created_at, product_updated_at,warranty_months,tax_percentage,is_universal
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), ?, ?, ?)`,
       [
         category_id,
         sub_category_id,
@@ -356,6 +275,7 @@ export const createProduct = async (req, res) => {
         active || "active",
         warranty_months || null,
         tax_percentage || 0.0,
+        is_universal !== undefined ? is_universal : 0,
       ],
     );
 
@@ -379,7 +299,6 @@ export const createProduct = async (req, res) => {
         [product_media],
       );
     }
-    console.log(vehicle_generation_ids);
 
     // ---------- HANDLE VEHICLE COMPATIBILITY ----------
     if (
@@ -423,8 +342,8 @@ export const createProduct = async (req, res) => {
 
       await connection.query(
         `INSERT INTO product_vehicle_compatibility
-      (product_id, vehicle_generation_id, compatibility_notes)
-      VALUES ?`,
+            (product_id, vehicle_generation_id, compatibility_notes)
+            VALUES ?`,
         [compatibilityValues],
       );
     }
@@ -440,22 +359,22 @@ export const createProduct = async (req, res) => {
 
     const [compatibility] = await pool.query(
       `SELECT
-              pvc.id,
-              pvc.compatibility_notes,
-              vg.id AS vehicle_generation_id,
-              vg.year_from,
-              vg.year_to,
-              vm.name AS model_name,
-              mk.name AS make_name
-          FROM product_vehicle_compatibility pvc
-          JOIN vehicle_generations vg
-              ON pvc.vehicle_generation_id = vg.id
-          JOIN vehicle_models vm
-              ON vg.model_id = vm.id
-          JOIN vehicle_makes mk
-              ON vm.make_id = mk.id
-          WHERE pvc.product_id = ?
-          ORDER BY mk.name, vm.name, vg.year_from`,
+                pvc.id,
+                pvc.compatibility_notes,
+                vg.id AS vehicle_generation_id,
+                vg.year_from,
+                vg.year_to,
+                vm.name AS model_name,
+                mk.name AS make_name
+            FROM product_vehicle_compatibility pvc
+            JOIN vehicle_generations vg
+                ON pvc.vehicle_generation_id = vg.id
+            JOIN vehicle_models vm
+                ON vg.model_id = vm.id
+            JOIN vehicle_makes mk
+                ON vm.make_id = mk.id
+            WHERE pvc.product_id = ?
+            ORDER BY mk.name, vm.name, vg.year_from`,
       [productId],
     );
 
@@ -502,11 +421,11 @@ export const updateProduct = async (req, res) => {
       status,
       vehicle_generation_ids,
       tax_percentage,
+      is_universal,
     } = req.body;
     const warranty_months =
       req.body.warranty_months === 0 ? null : req.body.warranty_months;
     // Check existence
-    console.log(req.body, "3456789");
     const [existing] = await connection.query(
       "SELECT * FROM product WHERE id = ?",
       [id],
@@ -554,7 +473,8 @@ export const updateProduct = async (req, res) => {
         status = ?,
         product_updated_at = ?,
         warranty_months = ?,
-        tax_percentage = ?
+        tax_percentage = ?,
+        is_universal = ?
       WHERE id = ?`,
       [
         category_id,
@@ -581,6 +501,7 @@ export const updateProduct = async (req, res) => {
         now, // only one timestamp
         warranty_months,
         tax_percentage || 0.0,
+        is_universal !== undefined ? is_universal : 0,
         id,
       ],
     );
