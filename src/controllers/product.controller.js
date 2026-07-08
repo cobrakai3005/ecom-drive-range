@@ -55,7 +55,7 @@ export const getAllProducts = async (req, res) => {
       category_id,
       sub_category_id,
       brand_id,
-      status,
+      status = "active",
       is_featured,
       is_front,
       sort_by = "latest",
@@ -75,7 +75,7 @@ export const getAllProducts = async (req, res) => {
       params.push(category_id);
     }
     if (sub_category_id) {
-      whereClauses.push("p.category_id = ?");
+      whereClauses.push("p.sub_category_id = ?");
       params.push(sub_category_id);
     }
 
