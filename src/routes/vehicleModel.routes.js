@@ -1,7 +1,7 @@
 import express from "express";
 import {
   getAllModels,
-  getModelById,
+  getModelByIdOrSlug,
   createModel,
   updateModel,
   deleteModel,
@@ -13,7 +13,7 @@ const router = express.Router();
 
 // Public routes (read-only)
 router.get("/get_all_models", getAllModels);
-router.get("/get_model_by_id/:id", getModelById);
+router.get("/get_model_by_id/:identifier", getModelByIdOrSlug);
 
 // Admin only routes
 router.post(

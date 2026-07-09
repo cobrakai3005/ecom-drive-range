@@ -1,6 +1,35 @@
 import { pool } from "../config/db.js";
 import { logAudit } from "../lib/auditLog.js";
 
+// ------------------- HELPERS -------------------
+const generateSlug = (name) => {
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/[^\w\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-");
+};
+
+const makeSlugUnique = async (slug, currentId = null) => {
+  let uniqueSlug = slug;
+  let counter = 1;
+  let exists = true;
+
+  while (exists) {
+    const [rows] = await pool.query(
+      "SELECT id FROM vehicle_models WHERE slug = ? AND (id != ? OR ? IS NULL)",
+      [uniqueSlug, currentId || 0, currentId],
+    );
+    if (rows.length === 0) {
+      exists = false;
+    } else {
+      uniqueSlug = `${slug}-${counter}`;
+      counter++;
+    }
+  }
+  return uniqueSlug;
+};
 // ========== GET models (filter by make_id, search, status, pagination) ==========
 export const getAllModels = async (req, res) => {
   try {
@@ -83,15 +112,17 @@ export const getAllModels = async (req, res) => {
   }
 };
 // ========== GET single model by id ==========
-export const getModelById = async (req, res) => {
-  const { id } = req.params;
+export const getModelByIdOrSlug = async (req, res) => {
+  const { identifier } = req.params;
+  const isNumeric = !isNaN(identifier);
   try {
+    const field = isNumeric ? "m.id" : "m.slug";
     const [rows] = await pool.query(
       `SELECT m.*, mk.name as make_name 
        FROM vehicle_models m
        LEFT JOIN vehicle_makes mk ON m.make_id = mk.id
-       WHERE m.id = ?`,
-      [id],
+       WHERE ${field} = ?`,
+      [identifier],
     );
     if (rows.length === 0) {
       return res
@@ -140,10 +171,11 @@ export const createModel = async (req, res) => {
 
     // Use provided status, default to 'active' if not given
     const finalStatus = status || "active";
-
+    let slug = generateSlug(name);
+    slug = await makeSlugUnique(slug);
     const [result] = await pool.query(
-      "INSERT INTO vehicle_models (make_id, name, description, model_image_url, status) VALUES (?, ?, ?, ?, ?)",
-      [make_id, name, description || null, model_image_url, finalStatus],
+      "INSERT INTO vehicle_models (make_id, name, description, model_image_url, status, slug) VALUES (?, ?, ?, ?, ?, ?)",
+      [make_id, name, description || null, model_image_url, finalStatus, slug],
     );
     const [newModel] = await pool.query(
       "SELECT * FROM vehicle_models WHERE id = ?",
@@ -194,7 +226,11 @@ export const updateModel = async (req, res) => {
         .status(404)
         .json({ success: false, message: "Vehicle model not found" });
     }
-
+    let slug = existing[0].slug;
+    if (name && name !== existing[0].name) {
+      slug = generateSlug(name);
+      slug = await makeSlugUnique(slug, id);
+    }
     // Validate make_id if provided
     if (make_id) {
       const [make] = await pool.query(
@@ -226,6 +262,9 @@ export const updateModel = async (req, res) => {
     if (name) {
       fields.push("name = ?");
       values.push(name);
+
+      fields.push("slug = ?");
+      values.push(slug);
     }
     if (description !== undefined) {
       fields.push("description = ?");

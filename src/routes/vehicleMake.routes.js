@@ -1,7 +1,7 @@
 import express from "express";
 import {
   getAllMakes,
-  getMakeById,
+  getMakeByIdOrSlug,
   createMake,
   updateMake,
   deleteMake,
@@ -13,7 +13,7 @@ const router = express.Router();
 
 // Public routes (read-only)
 router.get("/get_all_makes", getAllMakes);
-router.get("/get_make_by_id/:id", getMakeById);
+router.get("/get_make_by_id/:identifier", getMakeByIdOrSlug);
 
 // Admin only routes
 router.post(

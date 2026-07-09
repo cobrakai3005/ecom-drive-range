@@ -1,6 +1,34 @@
 import { pool } from "../config/db.js";
 import { logAudit } from "../lib/auditLog.js";
 
+const generateSlug = (name) => {
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/[^\w\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-");
+};
+
+const makeSlugUnique = async (slug, currentId = null) => {
+  let uniqueSlug = slug;
+  let counter = 1;
+  let exists = true;
+
+  while (exists) {
+    const [rows] = await pool.query(
+      "SELECT id FROM vehicle_makes WHERE slug = ? AND (id != ? OR ? IS NULL)",
+      [uniqueSlug, currentId || 0, currentId],
+    );
+    if (rows.length === 0) {
+      exists = false;
+    } else {
+      uniqueSlug = `${slug}-${counter}`;
+      counter++;
+    }
+  }
+  return uniqueSlug;
+};
 // ========== GET all vehicle makes (public + pagination + search) ==========
 export const getAllMakes = async (req, res) => {
   try {
@@ -70,12 +98,14 @@ export const getAllMakes = async (req, res) => {
 };
 
 // ========== GET single make by id ==========
-export const getMakeById = async (req, res) => {
-  const { id } = req.params;
+export const getMakeByIdOrSlug = async (req, res) => {
+  const { identifier } = req.params;
+  const isNumeric = !isNaN(identifier);
   try {
+    const field = isNumeric ? "p.id" : "p.slug";
     const [rows] = await pool.query(
-      "SELECT * FROM vehicle_makes WHERE id = ?",
-      [id],
+      `SELECT * FROM vehicle_makes WHERE ${field} = ?`,
+      [identifier],
     );
     if (rows.length === 0) {
       return res
@@ -97,15 +127,16 @@ export const createMake = async (req, res) => {
       .status(400)
       .json({ success: false, message: "Name is required" });
   }
-
+  let slug = generateSlug(name);
+  slug = await makeSlugUnique(slug);
   let logo_url = null;
   if (req.file) {
     logo_url = req.file.path;
   }
   try {
     const [result] = await pool.query(
-      "INSERT INTO vehicle_makes (name, logo_url, country) VALUES (?, ?, ?)",
-      [name, logo_url || null, country || null],
+      "INSERT INTO vehicle_makes (name, logo_url, country, slug) VALUES (?, ?, ?, ?)",
+      [name, logo_url || null, country || null, slug],
     );
     const [newMake] = await pool.query(
       "SELECT * FROM vehicle_makes WHERE id = ?",
@@ -146,11 +177,15 @@ export const updateMake = async (req, res) => {
         .status(404)
         .json({ success: false, message: "Vehicle make not found" });
     }
-
+    let slug = existing[0].slug;
+    if (name && name !== existing[0].name) {
+      slug = generateSlug(name);
+      slug = await makeSlugUnique(slug, id);
+    }
     await pool.query(
       `UPDATE vehicle_makes
-       SET name = COALESCE(?, name), logo_url = COALESCE(?, logo_url), country = COALESCE(?, country), status = COALESCE(?, status) WHERE id = ?`,
-      [name, logo_url, country, status, id],
+       SET name = COALESCE(?, name), logo_url = COALESCE(?, logo_url), country = COALESCE(?, country), status = COALESCE(?, status), slug = COALESCE(?, slug) WHERE id = ?`,
+      [name, logo_url, country, status, slug, id],
     );
     const [updated] = await pool.query(
       "SELECT * FROM vehicle_makes WHERE id = ?",
