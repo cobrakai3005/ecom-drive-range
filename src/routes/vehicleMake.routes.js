@@ -20,7 +20,6 @@ router.post(
   "/create_make",
   verifyToken,
   authorize("Admin"),
-
   (req, res, next) => {
     upload.single("logo_url")(req, res, (err) => {
       if (err) {

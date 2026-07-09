@@ -140,7 +140,7 @@ export const createBrand = async (req, res) => {
       [name, slug, logo_url, website || null, status || "active"],
     );
 
-    const [newBrand] = await pool.query("`SELECT` * FROM brands WHERE id = ?", [
+    const [newBrand] = await pool.query("SELECT * FROM brands WHERE id = ?", [
       result.insertId,
     ]);
     res.status(201).json({ success: true, data: newBrand[0] });
