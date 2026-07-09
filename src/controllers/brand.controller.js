@@ -2,6 +2,35 @@
 import { pool } from "../config/db.js";
 import cloudinary from "../config/cloudinary.js";
 
+// ------------------- HELPERS -------------------
+const generateSlug = (name) => {
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/[^\w\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-");
+};
+
+const makeSlugUnique = async (slug, currentId = null) => {
+  let uniqueSlug = slug;
+  let counter = 1;
+  let exists = true;
+
+  while (exists) {
+    const [rows] = await pool.query(
+      "SELECT id FROM brands WHERE slug = ? AND (id != ? OR ? IS NULL)",
+      [uniqueSlug, currentId || 0, currentId],
+    );
+    if (rows.length === 0) {
+      exists = false;
+    } else {
+      uniqueSlug = `${slug}-${counter}`;
+      counter++;
+    }
+  }
+  return uniqueSlug;
+};
 // GET all brands (with pagination, status filter, and optional search)
 export const getAllBrands = async (req, res) => {
   try {
@@ -60,18 +89,21 @@ export const getAllBrands = async (req, res) => {
 };
 
 // GET single brand by id (with optional status check)
-export const getBrandById = async (req, res) => {
-  const { id } = req.params;
-  const { status } = req.query;
+export const getBrandByIdOrSlug = async (req, res) => {
+  const { identifier } = req.params;
+  const isNumeric = !isNaN(identifier);
+
+  // const { status } = req.query;
 
   try {
-    let query = "SELECT * FROM brands WHERE id = ?";
-    const params = [id];
+    const field = isNumeric ? "p.id" : "p.slug";
+    let query = `SELECT * FROM brands WHERE ${field} = ?`;
+    const params = [identifier];
 
-    if (status && ["active", "inactive"].includes(status)) {
-      query += " AND status = ?";
-      params.push(status);
-    }
+    // if (status && ["active", "inactive"].includes(status)) {
+    //   query += " AND status = ?";
+    //   params.push(status);
+    // }
 
     const [rows] = await pool.query(query, params);
     if (rows.length === 0) {
@@ -99,16 +131,17 @@ export const createBrand = async (req, res) => {
         .status(400)
         .json({ success: false, message: "Name is required" });
     }
-
+    let slug = generateSlug(name);
+    slug = await makeSlugUnique(slug);
     const logo_url = req.file ? req.file.path : null;
 
     const [result] = await pool.query(
-      `INSERT INTO brands (name, logo_url, website, status) 
-       VALUES (?, ?, ?, ?)`,
-      [name, logo_url, website || null, status || "active"],
+      `INSERT INTO brands (name, slug, logo_url, website, status) 
+       VALUES (?, ?, ?, ?, ?)`,
+      [name, slug, logo_url, website || null, status || "active"],
     );
 
-    const [newBrand] = await pool.query("SELECT * FROM brands WHERE id = ?", [
+    const [newBrand] = await pool.query("`SELECT` * FROM brands WHERE id = ?", [
       result.insertId,
     ]);
     res.status(201).json({ success: true, data: newBrand[0] });
@@ -137,7 +170,11 @@ export const updateBrand = async (req, res) => {
 
     const { name, website, status } = req.body;
     let logo_url = existing[0].logo_url;
-
+    let slug = existing[0].slug;
+    if (name && name !== existing[0].name) {
+      slug = generateSlug(name);
+      slug = await makeSlugUnique(slug, id);
+    }
     if (req.file) {
       // Delete old logo from Cloudinary
       if (existing[0].logo_url) {
@@ -156,10 +193,17 @@ export const updateBrand = async (req, res) => {
        SET name = COALESCE(?, name),
            logo_url = ?,
            website = COALESCE(?, website),
-           status = COALESCE(?, status)
-         
+           status = COALESCE(?, status),
+           slug = COALESCE(?, slug)
        WHERE id = ?`,
-      [name || null, logo_url, website || null, status || null, id],
+      [
+        name || null,
+        logo_url,
+        website || null,
+        status || null,
+        slug || null,
+        id,
+      ],
     );
 
     const [updated] = await pool.query("SELECT * FROM brands WHERE id = ?", [

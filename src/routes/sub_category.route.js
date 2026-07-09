@@ -14,7 +14,7 @@ router.get(
 router.get(
   "/get_subcategory_by_id/:id",
   verifyToken,
-  subcategoryController.getSubcategoryById,
+  subcategoryController.getSubcategoryByIdOrSlug,
 );
 router.post(
   "/create_subcategory",

@@ -12,9 +12,9 @@ router.get(
   categoryController.getAllCategories,
 );
 router.get(
-  "/get_category_by_id/:id",
+  "/get_category_by_id/:identifier",
   verifyToken,
-  categoryController.getCategoryById,
+  categoryController.getCategoryByIdOrSlug,
 );
 router.post(
   "/create_category",

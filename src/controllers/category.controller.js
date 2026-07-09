@@ -2,6 +2,36 @@
 import cloudinary from "../config/cloudinary.js";
 import { pool } from "../config/db.js";
 
+// ------------------- HELPERS -------------------
+const generateSlug = (name) => {
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/[^\w\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-");
+};
+
+const makeSlugUnique = async (slug, currentId = null) => {
+  let uniqueSlug = slug;
+  let counter = 1;
+  let exists = true;
+
+  while (exists) {
+    const [rows] = await pool.query(
+      "SELECT id FROM categories WHERE slug = ? AND (id != ? OR ? IS NULL)",
+      [uniqueSlug, currentId || 0, currentId],
+    );
+    if (rows.length === 0) {
+      exists = false;
+    } else {
+      uniqueSlug = `${slug}-${counter}`;
+      counter++;
+    }
+  }
+  return uniqueSlug;
+};
+
 export const getAllCategories = async (req, res) => {
   try {
     // Parse and sanitize pagination
@@ -72,13 +102,15 @@ export const getAllCategories = async (req, res) => {
 };
 
 // Get single category by id – now accepts optional ?status= query param
-export const getCategoryById = async (req, res) => {
-  const { id } = req.params;
+export const getCategoryByIdOrSlug = async (req, res) => {
+  const { identifier } = req.params;
+  const isNumeric = !isNaN(identifier);
   const { status } = req.query; // 'active' or 'inactive' (optional)
 
   try {
-    let query = "SELECT * FROM categories WHERE id = ?";
-    const params = [id];
+    const field = isNumeric ? "p.id" : "p.slug";
+    let query = `SELECT * FROM categories WHERE ${field} = ?`;
+    const params = [identifier];
 
     query += " AND status = ?";
     if (status && ["active", "inactive"].includes(status)) {
@@ -92,7 +124,7 @@ export const getCategoryById = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: status
-          ? `Category not found with id ${id} and status ${status}`
+          ? `Category not found with ${isNumeric ? "id" : "slug"} ${identifier} and status ${status}`
           : "Category not found",
       });
     }
@@ -116,18 +148,22 @@ export const createCategory = async (req, res) => {
   }
 
   try {
+    let slug = generateSlug(name);
+    slug = await makeSlugUnique(slug);
     // Explicitly convert to 1 or 0
     const isFrontValue =
       is_front === true || is_front === "true" || is_front === 1 ? 1 : 0;
 
     const [result] = await pool.query(
-      `INSERT INTO categories (name, description, image_url, status, is_front)  
-             VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO categories (name, description, image_url, status, is_front, slug)  
+             VALUES (?, ?, ?, ?, ?, ?)`,
       [
         name,
         description || null,
         image_url || null,
         status || "active",
+        isFrontValue,
+        slug,
         isFrontValue, // ✅ Now always 1 or 0
       ],
     );
@@ -162,7 +198,11 @@ export const updateCategory = async (req, res) => {
 
     const { name, description, status, is_front } = req.body; // Removed display_order
     let image_url = existing[0]?.image_url; // keep old by default
-
+    let slug = existing[0].slug;
+    if (name && name !== existing[0].name) {
+      slug = generateSlug(name);
+      slug = await makeSlugUnique(slug, id);
+    }
     // If new file uploaded, use its URL
     if (req.file) {
       image_url = req.file.path;
@@ -191,7 +231,8 @@ export const updateCategory = async (req, res) => {
                  description = COALESCE(?, description),
                  image_url = ?,
                  status = COALESCE(?, status),
-                 is_front = ? 
+                 is_front = ?,
+                 slug = COALESCE(?, slug)
              WHERE id = ?`,
       [
         name || null,
@@ -199,6 +240,7 @@ export const updateCategory = async (req, res) => {
         image_url,
         status || null,
         isFrontValue, // ✅ Now always 1 or 0
+        slug || null,
         id,
       ],
     );

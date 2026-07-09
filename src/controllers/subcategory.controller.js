@@ -2,6 +2,35 @@
 import cloudinary from "../config/cloudinary.js";
 import { pool } from "../config/db.js";
 
+// ------------------- HELPERS -------------------
+const generateSlug = (name) => {
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/[^\w\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-");
+};
+
+const makeSlugUnique = async (slug, currentId = null) => {
+  let uniqueSlug = slug;
+  let counter = 1;
+  let exists = true;
+
+  while (exists) {
+    const [rows] = await pool.query(
+      "SELECT id FROM subcategory WHERE slug = ? AND (id != ? OR ? IS NULL)",
+      [uniqueSlug, currentId || 0, currentId],
+    );
+    if (rows.length === 0) {
+      exists = false;
+    } else {
+      uniqueSlug = `${slug}-${counter}`;
+      counter++;
+    }
+  }
+  return uniqueSlug;
+};
 // Get all subcategories with pagination, status filter, and optional category_id filter
 export const getAllSubcategories = async (req, res) => {
   try {
@@ -80,13 +109,16 @@ export const getAllSubcategories = async (req, res) => {
 };
 
 // Get single subcategory by id – accepts optional ?status= query param
-export const getSubcategoryById = async (req, res) => {
-  const { id } = req.params;
+export const getSubcategoryByIdOrSlug = async (req, res) => {
+  const { identifier } = req.params;
+  const isNumeric = !isNaN(identifier);
+
   const { status } = req.query;
 
   try {
-    let query = "SELECT * FROM subcategory WHERE id = ?";
-    const params = [id];
+    const field = isNumeric ? "p.id" : "p.slug";
+    let query = "SELECT * FROM subcategory WHERE " + field + " = ?";
+    const params = [identifier];
 
     query += " AND status = ?";
     if (status && ["active", "inactive"].includes(status)) {
@@ -100,7 +132,7 @@ export const getSubcategoryById = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: status
-          ? `Subcategory not found with id ${id} and status ${status}`
+          ? `SubCategory not found with ${isNumeric ? "id" : "slug"} ${identifier} and status ${status}`
           : "Subcategory not found",
       });
     }
@@ -137,7 +169,8 @@ export const createSubcategory = async (req, res) => {
         .status(400)
         .json({ success: false, message: "Invalid category_id" });
     }
-
+    let slug = generateSlug(name);
+    slug = await makeSlugUnique(slug);
     const image_url = req.file ? req.file.path : null;
 
     // ✅ Convert is_front to 1 or 0
@@ -145,8 +178,8 @@ export const createSubcategory = async (req, res) => {
       is_front === true || is_front === "true" || is_front === 1 ? 1 : 0;
 
     const [result] = await pool.query(
-      `INSERT INTO subcategory (category_id, name, description, image_url, status, is_front)  
-             VALUES (?, ?, ?, ?, ?, ?)`, // ✅ Removed display_order
+      `INSERT INTO subcategory (category_id, name, description, image_url, status, is_front, slug)  
+             VALUES (?, ?, ?, ?, ?, ?, ?)`, // ✅ Removed display_order
       [
         category_id,
         name,
@@ -154,6 +187,7 @@ export const createSubcategory = async (req, res) => {
         image_url,
         status || "active",
         isFrontValue,
+        slug,
       ],
     );
 
@@ -213,7 +247,11 @@ export const updateSubcategory = async (req, res) => {
           .json({ success: false, message: "Invalid category_id" });
       }
     }
-
+    let slug = existing[0].slug;
+    if (name && name !== existing[0].name) {
+      slug = generateSlug(name);
+      slug = await makeSlugUnique(slug, id);
+    }
     // ✅ Convert is_front to 1 or 0
     const isFrontValue =
       is_front === true || is_front === "true" || is_front === 1 ? 1 : 0;
@@ -225,7 +263,8 @@ export const updateSubcategory = async (req, res) => {
                  description = COALESCE(?, description),
                  image_url = ?,
                  status = COALESCE(?, status),
-                 is_front = ? 
+                 is_front = ?,
+                 slug = COALESCE(?, slug)
              WHERE id = ?`,
       [
         category_id || null,
@@ -234,6 +273,7 @@ export const updateSubcategory = async (req, res) => {
         image_url,
         status || null,
         isFrontValue,
+        slug || null,
         id,
       ],
     );

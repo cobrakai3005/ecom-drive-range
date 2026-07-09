@@ -258,7 +258,14 @@ export const initiateRazorpayCheckout = async (req, res) => {
 
     for (const item of items) {
       const itemSubtotal = item.quantity * item.unit_price;
-      const itemTax = (itemSubtotal * item.tax_percentage) / 100;
+
+      const itemDiscount =
+        subtotal > 0 ? (itemSubtotal / subtotal) * discount_amount : 0;
+
+      const taxableAmount = itemSubtotal - itemDiscount;
+
+      const itemTax =
+        (taxableAmount * (parseFloat(item.tax_percentage) || 0)) / 100;
 
       tax_amount += itemTax;
     }

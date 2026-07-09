@@ -1,7 +1,7 @@
 import express from "express";
 import {
   getAllBrands,
-  getBrandById,
+  getBrandByIdOrSlug,
   createBrand,
   updateBrand,
   deleteBrand,
@@ -12,7 +12,7 @@ import upload from "../middlewares/multer.middleware.js";
 const router = express.Router();
 
 router.get("/get_all_brands", getAllBrands);
-router.get("/get_brand_by_id/:id", verifyToken, getBrandById);
+router.get("/get_brand_by_id/:identifier", verifyToken, getBrandByIdOrSlug);
 router.post(
   "/create_brand",
   (req, res, next) => {
