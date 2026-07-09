@@ -1,6 +1,35 @@
 import { pool } from "../config/db.js";
 import { logAudit } from "../lib/auditLog.js";
 
+// ------------------- HELPERS -------------------
+const generateSlug = (name) => {
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/[^\w\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-");
+};
+
+const makeSlugUnique = async (slug, currentId = null) => {
+  let uniqueSlug = slug;
+  let counter = 1;
+  let exists = true;
+
+  while (exists) {
+    const [rows] = await pool.query(
+      "SELECT id FROM vehicle_generations WHERE slug = ? AND (id != ? OR ? IS NULL)",
+      [uniqueSlug, currentId || 0, currentId],
+    );
+    if (rows.length === 0) {
+      exists = false;
+    } else {
+      uniqueSlug = `${slug}-${counter}`;
+      counter++;
+    }
+  }
+  return uniqueSlug;
+};
 // ========== GET generations (filter by model_id, year, pagination) ==========
 
 export const getAllGenerations = async (req, res) => {
@@ -118,16 +147,18 @@ export const getAvailableVehicleGenerations = async (req, res) => {
     });
   }
 };
-export const getGenerationById = async (req, res) => {
-  const { id } = req.params;
+export const getGenerationByIdOrSlug = async (req, res) => {
+  const { identifier } = req.params;
+  const isNumeric = !isNaN(identifier);
+  const field = isNumeric ? "g.id" : "g.slug";
   try {
     const [rows] = await pool.query(
       `SELECT g.*, m.name as model_name, mk.name as make_name
        FROM vehicle_generations g
        JOIN vehicle_models m ON g.model_id = m.id
        JOIN vehicle_makes mk ON m.make_id = mk.id
-       WHERE g.id = ?`,
-      [id],
+       WHERE ${field} = ?`,
+      [identifier],
     );
     if (rows.length === 0) {
       return res
@@ -173,13 +204,17 @@ export const createGeneration = async (req, res) => {
         .status(400)
         .json({ success: false, message: "Invalid model_id" });
     }
+
+    let slug = generateSlug(generation_name);
+    slug = await makeSlugUnique(slug);
     const [result] = await pool.query(
       `INSERT INTO vehicle_generations 
-       (model_id, generation_name, year_from, year_to, engine_options, status) 
+       (model_id, generation_name, slug, year_from, year_to, engine_options, status) 
        VALUES (?, ?, ?, ?, ?, ?)`,
       [
         model_id,
         generation_name || null,
+        slug,
         year_from,
         year_to || null,
         engine_options || null,
@@ -238,6 +273,11 @@ export const updateGeneration = async (req, res) => {
           .json({ success: false, message: "Invalid model_id" });
       }
     }
+    let slug = existing[0].slug;
+    if (generation_name) {
+      slug = generateSlug(generation_name);
+      slug = await makeSlugUnique(slug, id);
+    }
     await pool.query(
       `UPDATE vehicle_generations SET 
        model_id = COALESCE(?, model_id),
@@ -245,7 +285,8 @@ export const updateGeneration = async (req, res) => {
        year_from = COALESCE(?, year_from),
        year_to = COALESCE(?, year_to),
        engine_options = COALESCE(?, engine_options),
-       status = COALESCE(?, engine_options)
+       slug = COALESCE(?, slug),
+       status = COALESCE(?, status)
        WHERE id = ?`,
       [
         model_id,
@@ -253,6 +294,7 @@ export const updateGeneration = async (req, res) => {
         year_from,
         year_to,
         engine_options,
+        slug,
         status,
         id,
       ],

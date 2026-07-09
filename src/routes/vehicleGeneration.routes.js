@@ -1,7 +1,7 @@
 import express from "express";
 import {
   getAllGenerations,
-  getGenerationById,
+  getGenerationByIdOrSlug,
   createGeneration,
   updateGeneration,
   deleteGeneration,
@@ -14,8 +14,12 @@ const router = express.Router();
 
 // Public routes (read-only)
 router.get("/get_all_generations", getAllGenerations);
-router.get("/get_all_available_generation/:productId", getAvailableVehicleGenerations);
-router.get("/get_generation_by_id/:id", getGenerationById);
+router.get(
+  "/get_all_available_generation/:productId",
+  getAvailableVehicleGenerations,
+);
+router.get("/get_generation_by_id/:identifier", getGenerationByIdOrSlug);
+``;
 
 // Admin only routes
 router.post(
