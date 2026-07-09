@@ -97,7 +97,7 @@ export const getBrandByIdOrSlug = async (req, res) => {
 
   try {
     const field = isNumeric ? "p.id" : "p.slug";
-    let query = `SELECT * FROM brands WHERE ${field} = ?`;
+    let query = `SELECT * FROM brands WHERE ${field} = ? and status = "active"`;
     const params = [identifier];
 
     // if (status && ["active", "inactive"].includes(status)) {
@@ -109,9 +109,8 @@ export const getBrandByIdOrSlug = async (req, res) => {
     if (rows.length === 0) {
       return res.status(404).json({
         success: false,
-        message: status
-          ? `Brand not found with id ${id} and status ${status}`
-          : "Brand not found",
+        message:  `Brand not found with identifier ${identifier} `
+         
       });
     }
     res.json({ success: true, data: rows[0] });

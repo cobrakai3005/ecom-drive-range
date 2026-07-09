@@ -656,7 +656,8 @@ export const getOrderDetails = async (req, res) => {
     oi.unit_price,
     oi.total_price,
     oi.product_data_snapshot,
-
+    oi.tax_percentage,
+    oi.tax_amount,
     p.warranty_months,
 
     o.delivered_at,
