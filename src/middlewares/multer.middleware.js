@@ -1,41 +1,78 @@
-import { CloudinaryStorage } from "multer-storage-cloudinary";
-import cloudinary from "../config/cloudinary.js";
 import multer from "multer";
 import path from "path";
-const storage = new CloudinaryStorage({
-  cloudinary,
-  params: async (req, file) => {
-    const ext = file.originalname.split(".").pop();
+import fs from "fs";
 
-    return {
-      resource_type: "auto",
-      folder: "my-app-media",
-      public_id: `${Date.now()}_${Math.random().toString(36).substring(2, 10)}`,
-      format: ext,
-    };
-  },
-});
+const createUpload = (folderName) => {
+  const uploadDirectory = path.join(process.cwd(), "uploads", folderName);
 
-const upload = multer({
-  storage,
-  limits: {
-    fileSize: 50 * 1024 * 1024,
-  },
-  fileFilter: (req, file, cb) => {
-    const allowedMimeTypes = ["image/jpeg", "image/png", "image/jpg"];
+  if (!fs.existsSync(uploadDirectory)) {
+    fs.mkdirSync(uploadDirectory, { recursive: true });
+  }
 
-    const allowedExtensions = [".jpg", ".jpeg", ".png"];
+  const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+      cb(null, uploadDirectory);
+    },
 
-    const ext = path.extname(file.originalname).toLowerCase();
+    filename: (req, file, cb) => {
+      const extension = path.extname(file.originalname).toLowerCase();
 
-    const isMimeAllowed = allowedMimeTypes.includes(file.mimetype);
-    const isExtAllowed = allowedExtensions.includes(ext);
+      const uniqueName = `${Date.now()}_${Math.random()
+        .toString(36)
+        .substring(2, 10)}${extension}`;
 
-    if (isMimeAllowed || isExtAllowed) {
-      return cb(null, true);
-    }
+      cb(null, uniqueName);
+    },
+  });
 
-    return cb(new Error("Only png , jpeg , and jpg  images  are allowed"));
-  },
-});
-export default upload;
+  return multer({
+    storage,
+    limits: {
+      fileSize: 50 * 1024 * 1024,
+    },
+    fileFilter: (req, file, cb) => {
+      
+      const allowedMimeTypes = [
+        "image/jpeg",
+        "image/png",
+        "image/jpg",
+        "image/webp",
+        "image/gif",
+        "image/bmp",
+        "image/tiff",
+        "image/svg+xml",
+        "image/avif",
+        "image/heic",
+        "image/heif",
+      ];
+
+      const allowedExtensions = [
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".webp",
+        ".gif",
+        ".bmp",
+        ".tif",
+        ".tiff",
+        ".svg",
+        ".avif",
+        ".heic",
+        ".heif",
+      ];
+
+      const extension = path.extname(file.originalname).toLowerCase();
+
+      const isMimeAllowed = allowedMimeTypes.includes(file.mimetype);
+      const isExtensionAllowed = allowedExtensions.includes(extension);
+
+      if (isMimeAllowed || isExtensionAllowed) {
+        return cb(null, true);
+      }
+
+      return cb(new Error("Only PNG, JPEG, and JPG images are allowed"), false);
+    },
+  });
+};
+
+export default createUpload;

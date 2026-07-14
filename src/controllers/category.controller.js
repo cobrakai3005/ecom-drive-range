@@ -1,6 +1,7 @@
 // controllers/categoryController.js
 import cloudinary from "../config/cloudinary.js";
 import { pool } from "../config/db.js";
+import { deleteImage } from "../utils/deleteImages.js";
 
 // ------------------- HELPERS -------------------
 const generateSlug = (name) => {
@@ -45,13 +46,18 @@ export const getAllCategories = async (req, res) => {
     const params = [];
 
     // Status filter (only if provided)
-    whereConditions.push("status = ?");
-    if (status && ["active", "inactive"].includes(status)) {
+
+    if (status === "deleted") {
+      whereConditions.push("status = 'inactive'");
+      whereConditions.push("is_deleted = 1");
+    } else if (status && ["active", "inactive"].includes(status)) {
+      whereConditions.push("status = ?");
       params.push(status);
     } else {
-      params.push("active");
+      // By default, only return active categories
+      whereConditions.push("status = 'active'");
+      whereConditions.push("is_deleted = 0");
     }
-
     // is_front filter (only if provided)
     if (is_front !== undefined && is_front !== null) {
       const isFrontValue = ["true", "1", 1].includes(is_front) ? 1 : 0;
@@ -109,7 +115,7 @@ export const getCategoryByIdOrSlug = async (req, res) => {
 
   try {
     const field = isNumeric ? "p.id" : "p.slug";
-    let query = `SELECT * FROM categories WHERE ${field} = ?`;
+    let query = `SELECT * FROM categories WHERE ${field} = ? AND is_deleted = 0`;
     const params = [identifier];
 
     query += " AND status = ?";
@@ -139,7 +145,13 @@ export const createCategory = async (req, res) => {
   const { name, description, status, is_front } = req.body; // ✅ Removed display_order
 
   // Get Cloudinary URL from uploaded file
-  const image_url = req.file ? req.file.path : null; // 'path' contains the secure URL
+  // const image_url = req.file ? req.file.path : null; // 'path' contains the secure URL
+
+  console.log(req.file);
+
+  const image_url = req.file
+    ? `${req.protocol}://${req.get("host")}/uploads/categories/${req.file.filename}`
+    : null;
 
   if (!name || name.trim() === "") {
     return res
@@ -183,6 +195,7 @@ export const createCategory = async (req, res) => {
 // Update category with optional image replacement
 export const updateCategory = async (req, res) => {
   const { id } = req.params;
+  console.log(req.file);
 
   try {
     // Check if category exists
@@ -198,6 +211,7 @@ export const updateCategory = async (req, res) => {
 
     const { name, description, status, is_front } = req.body; // Removed display_order
     let image_url = existing[0]?.image_url; // keep old by default
+
     let slug = existing[0].slug;
     if (name && name !== existing[0].name) {
       slug = generateSlug(name);
@@ -205,16 +219,20 @@ export const updateCategory = async (req, res) => {
     }
     // If new file uploaded, use its URL
     if (req.file) {
-      image_url = req.file.path;
+      image_url = req.file
+        ? `${req.protocol}://${req.get("host")}/uploads/categories/${req.file.filename}`
+        : null;
 
       if (existing[0]?.image_url) {
-        const publicId = existing[0].image_url
-          .split("/")
-          .slice(-2)
-          .join("/")
-          .split(".")[0];
+        // const publicId = existing[0].image_url
+        //   .split("/")
+        //   .slice(-2)
+        //   .join("/")
+        //   .split(".")[0];
 
-        await cloudinary.uploader.destroy(publicId);
+        // await cloudinary.uploader.destroy(publicId);
+
+        await deleteImage(existing[0]?.image_url);
       }
     }
 
@@ -257,27 +275,83 @@ export const updateCategory = async (req, res) => {
 };
 
 // Delete a category (unchanged)
+// export const deleteCategory = async (req, res) => {
+//   const { id } = req.params;
+//   try {
+//     // 1. Check if any subcategories reference this category
+//     const [subcats] = await pool.query(
+//       "SELECT id FROM subcategory WHERE category_id = ? LIMIT 1",
+//       [id],
+//     );
+//     if (subcats.length > 0) {
+//       return res.status(400).json({
+//         success: false,
+//         message:
+//           "Cannot delete category because it has associated subcategories",
+//       });
+//     }
+
+//     // 2. Get the category's image URL before deleting the record
+//     const [category] = await pool.query(
+//       "SELECT image_url FROM categories WHERE id = ?",
+//       [id],
+//     );
+//     if (category.length === 0) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "Category not found",
+//       });
+//     }
+
+//     const imageUrl = category[0].image_url;
+
+//     // 3. Delete the category from database
+//     const [result] = await pool.query("DELETE FROM categories WHERE id = ?", [
+//       id,
+//     ]);
+//     if (result.affectedRows === 0) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "Category not found",
+//       });
+//     }
+
+//     // 4. Delete the image from Cloudinary if it exists
+//     if (imageUrl) {
+//       // Extract public ID from URL
+//       // URL example: https://res.cloudinary.com/.../categories/filename.jpg
+//       // const publicId = imageUrl.split("/").slice(-2).join("/").split(".")[0];
+//       // await cloudinary.uploader.destroy(publicId);
+//       await deleteImage(imageUrl);
+//     }
+
+//     res.json({
+//       success: true,
+//       message: "Category deleted successfully",
+//     });
+//   } catch (error) {
+//     console.error(error);
+//     res.status(500).json({
+//       success: false,
+//       message: "Server error while deleting category",
+//     });
+//   }
+// };
+
 export const deleteCategory = async (req, res) => {
   const { id } = req.params;
-  try {
-    // 1. Check if any subcategories reference this category
-    const [subcats] = await pool.query(
-      "SELECT id FROM subcategory WHERE category_id = ? LIMIT 1",
-      [id],
-    );
-    if (subcats.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Cannot delete category because it has associated subcategories",
-      });
-    }
 
-    // 2. Get the category's image URL before deleting the record
+  try {
     const [category] = await pool.query(
-      "SELECT image_url FROM categories WHERE id = ?",
+      `
+      SELECT id, status, is_deleted
+      FROM categories
+      WHERE id = ?
+      LIMIT 1
+      `,
       [id],
     );
+
     if (category.length === 0) {
       return res.status(404).json({
         success: false,
@@ -285,36 +359,79 @@ export const deleteCategory = async (req, res) => {
       });
     }
 
-    const imageUrl = category[0].image_url;
-
-    // 3. Delete the category from database
-    const [result] = await pool.query("DELETE FROM categories WHERE id = ?", [
-      id,
-    ]);
-    if (result.affectedRows === 0) {
-      return res.status(404).json({
+    if (category[0].is_deleted === 1) {
+      return res.status(400).json({
         success: false,
-        message: "Category not found",
+        message: "Category is already deleted",
       });
     }
 
-    // 4. Delete the image from Cloudinary if it exists
-    if (imageUrl) {
-      // Extract public ID from URL
-      // URL example: https://res.cloudinary.com/.../categories/filename.jpg
-      const publicId = imageUrl.split("/").slice(-2).join("/").split(".")[0];
-      await cloudinary.uploader.destroy(publicId);
+    const [result] = await pool.query(
+      `
+      UPDATE categories
+      SET
+        is_deleted = 1,
+        status = 'inactive'
+      WHERE id = ?
+        AND is_deleted = 0
+      `,
+      [id],
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Category could not be deleted",
+      });
     }
 
-    res.json({
+    return res.status(200).json({
       success: true,
       message: "Category deleted successfully",
     });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({
+    console.error("Error in deleteCategory:", error);
+
+    return res.status(500).json({
       success: false,
       message: "Server error while deleting category",
+    });
+  }
+};
+
+export const restoreCategory = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const [result] = await pool.query(
+      `
+      UPDATE categories
+      SET
+        is_deleted = 0,
+        status = 'active'
+      WHERE id = ?
+        AND is_deleted = 1
+      `,
+      [id],
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Deleted category not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Category restored successfully",
+    });
+  } catch (error) {
+    console.error("Error in restoreCategory:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error while restoring category",
     });
   }
 };
@@ -381,12 +498,13 @@ export const deleteCategoryImage = async (req, res) => {
     if (imageUrl) {
       try {
         // Extract public_id from Cloudinary URL
-        const parts = imageUrl.split("/");
-        const fileName = parts.pop().split(".")[0];
-        const folder = parts.slice(parts.indexOf("upload") + 2).join("/");
-        const publicId = folder ? `${folder}/${fileName}` : fileName;
+        // const parts = imageUrl.split("/");
+        // const fileName = parts.pop().split(".")[0];
+        // const folder = parts.slice(parts.indexOf("upload") + 2).join("/");
+        // const publicId = folder ? `${folder}/${fileName}` : fileName;
 
-        await cloudinary.uploader.destroy(publicId);
+        // await cloudinary.uploader.destroy(publicId);
+        await deleteImage(imageUrl);
       } catch (err) {
         console.error("Cloudinary delete failed:", err);
       }

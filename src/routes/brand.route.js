@@ -5,11 +5,13 @@ import {
   createBrand,
   updateBrand,
   deleteBrand,
+  restoreBrand,
 } from "../controllers/brand.controller.js";
 import verifyToken from "../middlewares/auth.middleware.js";
 import { authorize } from "../middlewares/authorize.middleware.js";
-import upload from "../middlewares/multer.middleware.js";
+import createUpload from "../middlewares/multer.middleware.js";
 const router = express.Router();
+const upload = createUpload("brands");
 
 router.get("/get_all_brands", getAllBrands);
 router.get("/get_brand_by_id/:identifier", verifyToken, getBrandByIdOrSlug);
@@ -49,5 +51,6 @@ router.delete(
   authorize("Admin"),
   deleteBrand,
 );
+router.get("/restore/:id", verifyToken, authorize("Admin"), restoreBrand);
 
 export default router;

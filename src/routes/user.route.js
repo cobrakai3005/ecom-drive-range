@@ -13,8 +13,10 @@ import {
 } from "../controllers/user.controller.js";
 import verifyToken from "../middlewares/auth.middleware.js";
 import { authorize } from "../middlewares/authorize.middleware.js";
-import upload from "../middlewares/multer.middleware.js";
+// import upload from "../middlewares/multer.middleware.js";
 const router = express.Router();
+import createUpload from "../middlewares/multer.middleware.js";
+const upload = createUpload("profile_images");
 
 router.post(
   "/create-user",
@@ -74,7 +76,15 @@ router.put(
   "/:id",
   verifyToken,
   authorize("Admin", "Staff", "Customer"),
-  upload.single("profile_image"),
+  (req, res, next) => {
+    upload.single("profile_image")(req, res, (err) => {
+      if (err) {
+        // Multer error (file size, type, etc.)
+        return res.status(400).json({ message: err.message });
+      }
+      next();
+    });
+  },
   updateUser,
 ); // optional
 router.delete("/:id", deleteUser);

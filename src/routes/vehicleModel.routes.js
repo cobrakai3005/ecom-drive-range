@@ -5,11 +5,13 @@ import {
   createModel,
   updateModel,
   deleteModel,
+  restoreModel,
 } from "../controllers/vehicleModel.controller.js";
 import verifyToken from "../middlewares/auth.middleware.js";
 import { authorize } from "../middlewares/authorize.middleware.js";
-import upload from "../middlewares/multer.middleware.js";
+import createUpload from "../middlewares/multer.middleware.js";
 const router = express.Router();
+const upload = createUpload("vehicle_models");
 
 // Public routes (read-only)
 router.get("/get_all_models", getAllModels);
@@ -54,5 +56,6 @@ router.delete(
   authorize("Admin"),
   deleteModel,
 );
+router.get("/restore/:id", verifyToken, authorize("Admin"), restoreModel);
 
 export default router;

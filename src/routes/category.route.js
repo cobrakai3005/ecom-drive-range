@@ -4,13 +4,12 @@ const router = express.Router();
 import * as categoryController from "../controllers/category.controller.js";
 import verifyToken from "../middlewares/auth.middleware.js";
 import { authorize } from "../middlewares/authorize.middleware.js";
-import upload from "../middlewares/multer.middleware.js";
+// import upload from "../middlewares/multer.middleware.js";
+import createUpload from "../middlewares/multer.middleware.js";
 
-router.get(
-  "/get_all_categories",
+const upload = createUpload("categories");
 
-  categoryController.getAllCategories,
-);
+router.get("/get_all_categories", categoryController.getAllCategories);
 router.get(
   "/get_category_by_id/:identifier",
   verifyToken,
@@ -64,6 +63,12 @@ router.patch(
   verifyToken,
   authorize("Admin"),
   categoryController.toggleCategoryStatus,
+);
+router.get(
+  "/restore/:id",
+  verifyToken,
+  authorize("Admin"),
+  categoryController.restoreCategory,
 );
 
 export default router;

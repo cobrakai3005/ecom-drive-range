@@ -1,4 +1,3 @@
-
 import { pool } from "../config/db.js";
 import { logAudit } from "../lib/auditLog.js";
 
@@ -244,5 +243,126 @@ export const getTransactionById = async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+export const getTransactionDashboardStats = async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT
+        COUNT(*) AS total_transactions,
+
+        SUM(CASE
+          WHEN status = 'pending' THEN 1
+          ELSE 0
+        END) AS pending_transactions,
+
+        SUM(
+            CASE
+                WHEN DATE(transaction_date) = CURDATE()
+                  AND status = 'success'
+                  AND transaction_type IN ('payment', 'capture')
+                THEN amount
+                ELSE 0
+              END
+          ) AS amount_received_today,
+
+        SUM(CASE
+          WHEN status = 'success' THEN 1
+          ELSE 0
+        END) AS successful_transactions,
+
+        SUM(CASE
+          WHEN status = 'failed' THEN 1
+          ELSE 0
+        END) AS failed_transactions,
+
+        SUM(CASE
+          WHEN transaction_type = 'payment' THEN 1
+          ELSE 0
+        END) AS payment_transactions,
+
+        SUM(CASE
+          WHEN transaction_type = 'refund' THEN 1
+          ELSE 0
+        END) AS refund_transactions,
+
+        SUM(CASE
+          WHEN DATE(transaction_date) = CURDATE() THEN 1
+          ELSE 0
+        END) AS new_transactions_today,
+
+        SUM(CASE
+          WHEN DATE(transaction_date) = CURDATE()
+            AND status = 'success'
+            AND transaction_type IN ('payment', 'capture')
+          THEN amount
+          ELSE 0
+        END) AS today_successful_amount,
+
+        SUM(CASE
+          WHEN DATE(transaction_date) = CURDATE()
+            AND status = 'success'
+            AND transaction_type = 'refund'
+          THEN amount
+          ELSE 0
+        END) AS today_refund_amount,
+
+        SUM(CASE
+          WHEN status = 'success'
+            AND transaction_type IN ('payment', 'capture')
+          THEN amount
+          ELSE 0
+        END) AS total_successful_amount,
+
+        SUM(CASE
+          WHEN status = 'success'
+            AND transaction_type = 'refund'
+          THEN amount
+          ELSE 0
+        END) AS total_refund_amount
+
+      FROM transactions
+    `);
+
+    const stats = rows[0];
+
+    const todaySuccessfulAmount = Number(stats.today_successful_amount) || 0;
+
+    const todayRefundAmount = Number(stats.today_refund_amount) || 0;
+
+    const totalSuccessfulAmount = Number(stats.total_successful_amount) || 0;
+
+    const totalRefundAmount = Number(stats.total_refund_amount) || 0;
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        total_transactions: Number(stats.total_transactions) || 0,
+        pending_transactions: Number(stats.pending_transactions) || 0,
+        successful_transactions: Number(stats.successful_transactions) || 0,
+        failed_transactions: Number(stats.failed_transactions) || 0,
+
+        payment_transactions: Number(stats.payment_transactions) || 0,
+        refund_transactions: Number(stats.refund_transactions) || 0,
+
+        new_transactions_today: Number(stats.new_transactions_today) || 0,
+
+        today_successful_amount: todaySuccessfulAmount,
+        today_refund_amount: todayRefundAmount,
+        today_net_amount: todaySuccessfulAmount - todayRefundAmount,
+
+        total_successful_amount: totalSuccessfulAmount,
+        total_refund_amount: totalRefundAmount,
+        total_net_amount: totalSuccessfulAmount - totalRefundAmount,
+      },
+    });
+  } catch (error) {
+    console.error("Transaction dashboard stats error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch transaction dashboard statistics",
+    });
   }
 };

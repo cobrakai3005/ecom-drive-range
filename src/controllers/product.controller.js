@@ -1,7 +1,9 @@
 // controllers/productController.js
 import pool from "../config/db.js";
 import cloudinary from "../config/cloudinary.js";
-
+import { deleteImage } from "../utils/deleteImages.js";
+import fs from "fs/promises";
+import path from "path";
 // ------------------- HELPERS -------------------
 const generateSlug = (name) => {
   return name
@@ -61,19 +63,26 @@ export const getAllProducts = async (req, res) => {
       sort_by = "latest",
     } = req.query;
 
-    const offset = (page - 1) * limit;
-    const params = [];
-    let whereClauses = [];
+    const currentPage = Math.max(1, Number(page) || 1);
+    const currentLimit = Math.min(100, Math.max(1, Number(limit) || 10));
+    const offset = (currentPage - 1) * currentLimit;
 
-    if (search) {
+    // Adjust according to the role stored in your JWT
+    const isAdmin = ["Admin", "Staff"].includes(req.user?.role);
+
+    const whereClauses = [];
+    const params = [];
+
+    if (search.trim()) {
       whereClauses.push("(p.name LIKE ? OR p.sku LIKE ?)");
-      params.push(`%${search}%`, `%${search}%`);
+      params.push(`%${search.trim()}%`, `%${search.trim()}%`);
     }
 
     if (category_id) {
       whereClauses.push("p.category_id = ?");
       params.push(category_id);
     }
+
     if (sub_category_id) {
       whereClauses.push("p.sub_category_id = ?");
       params.push(sub_category_id);
@@ -84,26 +93,50 @@ export const getAllProducts = async (req, res) => {
       params.push(brand_id);
     }
 
-    if (status) {
+    if (status === "deleted") {
+      whereClauses.push("p.status = 'inactive'");
+      whereClauses.push("p.is_available = 0");
+    } else if (status) {
       whereClauses.push("p.status = ?");
       params.push(status);
     }
 
     if (is_featured !== undefined) {
       whereClauses.push("p.is_featured = ?");
-      params.push(is_featured);
+      params.push(Number(is_featured));
     }
 
     if (is_front !== undefined) {
       whereClauses.push("p.is_front = ?");
-      params.push(is_front);
+      params.push(Number(is_front));
+    }
+
+    /*
+     * Customer panel:
+     * Hide products when their category, subcategory, or brand
+     * is deleted/inactive.
+     *
+     * Admin panel:
+     * Do not hide them. Return deletion flags instead.
+     */
+    if (!isAdmin) {
+      whereClauses.push("p.is_available = 1");
+
+      whereClauses.push("c.is_deleted = 0");
+
+      whereClauses.push("c.status = 'active'");
+
+      whereClauses.push("sc.is_deleted = 0");
+      whereClauses.push("sc.status = 'active'");
+
+      whereClauses.push("(br.is_deleted = 0 OR br.id IS NULL)");
+      whereClauses.push("(br.status = 'active' OR br.id IS NULL)");
     }
 
     const whereSQL = whereClauses.length
       ? `WHERE ${whereClauses.join(" AND ")}`
       : "";
 
-    // Safe sorting
     const sortOptions = {
       latest: "p.product_created_at DESC",
       oldest: "p.product_created_at ASC",
@@ -113,55 +146,106 @@ export const getAllProducts = async (req, res) => {
       name_za: "p.name DESC",
       stock_low_high: "p.available_stock ASC",
       stock_high_low: "p.available_stock DESC",
-      featured: "p.is_featured DESC, p.created_at DESC",
+      featured: "p.is_featured DESC, p.product_created_at DESC",
     };
 
     const orderBy = sortOptions[sort_by] || sortOptions.latest;
 
-    // Count
+    const baseJoinSQL = `
+      FROM product p
+
+      LEFT JOIN categories c
+        ON p.category_id = c.id
+
+      LEFT JOIN subcategory sc
+        ON p.sub_category_id = sc.id
+
+      LEFT JOIN brands br
+        ON p.brand_id = br.id
+    `;
+
+    // Count must use the same JOINs and conditions as the product query
     const [countResult] = await pool.query(
-      `SELECT COUNT(*) AS total
-       FROM product p
-       ${whereSQL}`,
+      `
+        SELECT COUNT(DISTINCT p.id) AS total
+        ${baseJoinSQL}
+        ${whereSQL}
+      `,
       params,
     );
 
     const total = countResult[0].total;
 
-    // Products
     const [products] = await pool.query(
       `
-      SELECT
-        p.*,
-        br.name AS brand_name
-      FROM product p
-      LEFT JOIN brands br
-        ON p.brand_id = br.id
-      ${whereSQL}
-      ORDER BY ${orderBy}
-      LIMIT ?
-      OFFSET ?
+        SELECT
+          p.*,
+
+          c.name AS category_name,
+          c.status AS category_status,
+          COALESCE(c.is_deleted, 1) AS category_is_deleted,
+
+          sc.name AS subcategory_name,
+          sc.status AS subcategory_status,
+          COALESCE(sc.is_deleted, 1) AS subcategory_is_deleted,
+
+          br.name AS brand_name,
+          br.status AS brand_status,
+          CASE
+            WHEN br.id IS NULL THEN 0
+            ELSE COALESCE(br.is_deleted, 1)
+          END AS brand_is_deleted,
+
+          CASE
+            WHEN c.id IS NULL THEN
+              'Category no longer exists'
+            WHEN c.is_deleted = 1 THEN
+              'Product is not deleted, but its category is deleted'
+            WHEN c.status = 'inactive' THEN
+              'Product is not deleted, but its category is inactive'
+            WHEN sc.id IS NULL THEN
+              'Subcategory no longer exists'
+            WHEN sc.is_deleted = 1 THEN
+              'Product is not deleted, but its subcategory is deleted'
+            WHEN sc.status = 'inactive' THEN
+              'Product is not deleted, but its subcategory is inactive'
+            WHEN br.id IS NOT NULL AND br.is_deleted = 1 THEN
+              'Product is not deleted, but its brand is deleted'
+            WHEN br.id IS NOT NULL AND br.status = 'inactive' THEN
+              'Product is not deleted, but its brand is inactive'
+            ELSE NULL
+          END AS relation_warning
+
+        ${baseJoinSQL}
+        ${whereSQL}
+
+        ORDER BY ${orderBy}
+        LIMIT ?
+        OFFSET ?
       `,
-      [...params, Number(limit), Number(offset)],
+      [...params, currentLimit, offset],
     );
 
-    for (const product of products) {
-      product.media = await getProductMedia(product.id);
-    }
+    await Promise.all(
+      products.map(async (product) => {
+        product.media = await getProductMedia(product.id);
+      }),
+    );
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       data: products,
       pagination: {
         total,
-        page: Number(page),
-        limit: Number(limit),
-        totalPages: Math.ceil(total / limit),
+        page: currentPage,
+        limit: currentLimit,
+        totalPages: Math.ceil(total / currentLimit),
       },
     });
   } catch (error) {
     console.error("Error in getAllProducts:", error);
-    res.status(500).json({
+
+    return res.status(500).json({
       success: false,
       message: "Internal server error",
     });
@@ -178,8 +262,23 @@ export const getProductByIdOrSlug = async (req, res) => {
     const [rows] = await pool.query(
       `SELECT p.* , br.name  brand_name
        FROM product p
+       INNER JOIN categories c
+       ON p.category_id = c.id
+
+       INNER JOIN subcategory sc
+       ON p.sub_category_id = sc.id
+
        LEFT JOIN brands br ON p.brand_id = br.id
-       WHERE ${field} = ?`,
+       WHERE ${field} = ?
+       
+        AND c.is_deleted = 0
+        AND c.status = 'active'
+        AND sc.is_deleted = 0
+        AND (br.is_deleted = 0 OR br.id IS NULL)
+        AND sc.status = 'active'
+        AND (br.status = 'active' OR br.id IS NULL)
+        AND p.is_available = 1
+       `,
       [identifier],
     );
 
@@ -287,19 +386,27 @@ export const createProduct = async (req, res) => {
     const productId = result.insertId;
 
     // ---------- HANDLE MEDIA (skip empty files) ----------
-    const product_media = req.files?.map((el) => [
+    // const product_media = req.files?.map((el) => [
+    //   productId,
+    //   el.path,
+    //   el.filename,
+    //   0,
+    //   "active",
+    // ]);
+    const product_media = req.files?.map((file) => [
       productId,
-      el.path,
-      el.filename,
+      `${req.protocol}://${req.get("host")}/uploads/products/${file.filename}`,
+
       0,
       "active",
     ]);
+
     // Insert media
 
     if (product_media.length > 0) {
       await connection.query(
         `INSERT INTO product_media
-    (product_id, image_url, image_url_id, sort_order, status)
+    (product_id, image_url, sort_order, status)
     VALUES ?`,
         [product_media],
       );
@@ -511,70 +618,183 @@ export const updateProduct = async (req, res) => {
       ],
     );
     // Add Images If Sent
-    let product_media;
+    // let product_media;
 
+    // if (req.files && req.files.length > 0) {
+    //   product_media = req.files?.map((file) => [
+    //     productId,
+    //     `${req.protocol}://${req.get("host")}/uploads/products/${file.filename}`,
+    //     file.filename,
+    //     0,
+    //     "active",
+    //   ]);
+    //   // Insert media
+
+    //   await connection.query(
+    //     `INSERT INTO product_media (product_id, image_url, image_url_id, sort_order, status) VALUES ?`,
+    //     [product_media],
+    //   );
+    // }
+
+    // Add Images If Sent
     if (req.files && req.files.length > 0) {
-      product_media = req.files?.map((el) => [
+      // Get existing images
+      const [existingImages] = await connection.query(
+        `SELECT image_url
+     FROM product_media
+     WHERE product_id = ?`,
+        [productId],
+      );
+
+      // Delete files from disk
+      for (const image of existingImages) {
+        const filePath = path.join(
+          process.cwd(),
+          "uploads",
+          "products",
+          image.image_url,
+        );
+
+        try {
+          await fs.unlink(filePath);
+        } catch (err) {
+          // Ignore if file doesn't exist
+          if (err.code !== "ENOENT") {
+            console.error("Failed to delete image:", err);
+          }
+        }
+      }
+
+      // Delete old DB records
+      await connection.query(`DELETE FROM product_media WHERE product_id = ?`, [
         productId,
-        el.path,
-        el.filename,
+      ]);
+
+      // Prepare new images
+      const product_media = req.files.map((file) => [
+        productId,
+        `${req.protocol}://${req.get("host")}/uploads/products/${file.filename}`,
+        file.filename,
         0,
         "active",
       ]);
-      // Insert media
 
+      // Insert new records
       await connection.query(
-        `INSERT INTO product_media (product_id, image_url, image_url_id, sort_order, status) VALUES ?`,
+        `INSERT INTO product_media
+      (product_id, image_url, image_url_id, sort_order, status)
+     VALUES ?`,
         [product_media],
       );
     }
 
     // ---------- UPDATE VEHICLE COMPATIBILITY ----------
 
-    if (
-      Array.isArray(vehicle_generation_ids) &&
-      vehicle_generation_ids.length > 0
-    ) {
-      const uniqueIds = [...new Set(vehicle_generation_ids.map(Number))];
+    // if (
+    //   Array.isArray(vehicle_generation_ids) &&
+    //   vehicle_generation_ids.length > 0
+    // ) {
+    //   const uniqueIds = [...new Set(vehicle_generation_ids.map(Number))];
 
-      const placeholders = uniqueIds.map(() => "?").join(",");
+    //   const placeholders = uniqueIds.map(() => "?").join(",");
 
-      const [generations] = await connection.query(
-        `SELECT id
-     FROM vehicle_generations
-     WHERE id IN (${placeholders})`,
-        uniqueIds,
-      );
+    //   const [generations] = await connection.query(
+    //     `SELECT id
+    //  FROM vehicle_generations
+    //  WHERE id IN (${placeholders})`,
+    //     uniqueIds,
+    //   );
 
-      if (generations.length !== uniqueIds.length) {
-        const foundIds = generations.map((g) => Number(g.id));
+    //   if (generations.length !== uniqueIds.length) {
+    //     const foundIds = generations.map((g) => Number(g.id));
 
-        const invalidIds = uniqueIds.filter((id) => !foundIds.includes(id));
+    //     const invalidIds = uniqueIds.filter((id) => !foundIds.includes(id));
 
-        await connection.rollback();
+    //     await connection.rollback();
 
-        return res.status(400).json({
-          success: false,
-          message: `Invalid vehicle generation IDs: ${invalidIds.join(", ")}`,
-        });
+    //     return res.status(400).json({
+    //       success: false,
+    //       message: `Invalid vehicle generation IDs: ${invalidIds.join(", ")}`,
+    //     });
+    //   }
+
+    //   const [existingRows] = await connection.query(
+    //     `SELECT vehicle_generation_id
+    //  FROM product_vehicle_compatibility
+    //  WHERE product_id = ?
+    //  AND vehicle_generation_id IN (${placeholders})`,
+    //     [productId, ...uniqueIds],
+    //   );
+
+    //   const existingIds = existingRows.map((row) =>
+    //     Number(row.vehicle_generation_id),
+    //   );
+
+    //   const newIds = uniqueIds.filter((id) => !existingIds.includes(id));
+
+    //   if (newIds.length > 0) {
+    //     const compatibilityValues = newIds.map((generationId) => [
+    //       productId,
+    //       generationId,
+    //       null,
+    //     ]);
+
+    //     await connection.query(
+    //       `INSERT INTO product_vehicle_compatibility
+    //    (product_id, vehicle_generation_id, compatibility_notes)
+    //    VALUES ?`,
+    //       [compatibilityValues],
+    //     );
+    //   }
+    // }
+
+    // Replace existing vehicle compatibility with new compatibility
+    if (Array.isArray(vehicle_generation_ids)) {
+      const uniqueIds = [
+        ...new Set(
+          vehicle_generation_ids
+            .map(Number)
+            .filter((id) => Number.isInteger(id) && id > 0),
+        ),
+      ];
+
+      // Validate selected generation IDs
+      if (uniqueIds.length > 0) {
+        const placeholders = uniqueIds.map(() => "?").join(",");
+
+        const [generations] = await connection.query(
+          `SELECT id
+       FROM vehicle_generations
+       WHERE id IN (${placeholders})`,
+          uniqueIds,
+        );
+
+        if (generations.length !== uniqueIds.length) {
+          const foundIds = generations.map((generation) =>
+            Number(generation.id),
+          );
+
+          const invalidIds = uniqueIds.filter((id) => !foundIds.includes(id));
+
+          await connection.rollback();
+
+          return res.status(400).json({
+            success: false,
+            message: `Invalid vehicle generation IDs: ${invalidIds.join(", ")}`,
+          });
+        }
       }
 
-      const [existingRows] = await connection.query(
-        `SELECT vehicle_generation_id
-     FROM product_vehicle_compatibility
-     WHERE product_id = ?
-     AND vehicle_generation_id IN (${placeholders})`,
-        [productId, ...uniqueIds],
+      // Delete all existing compatibility for this product
+      await connection.query(
+        `DELETE FROM product_vehicle_compatibility
+     WHERE product_id = ?`,
+        [productId],
       );
 
-      const existingIds = existingRows.map((row) =>
-        Number(row.vehicle_generation_id),
-      );
-
-      const newIds = uniqueIds.filter((id) => !existingIds.includes(id));
-
-      if (newIds.length > 0) {
-        const compatibilityValues = newIds.map((generationId) => [
+      // Insert newly selected compatibility
+      if (uniqueIds.length > 0) {
+        const compatibilityValues = uniqueIds.map((generationId) => [
           productId,
           generationId,
           null,
@@ -582,7 +802,11 @@ export const updateProduct = async (req, res) => {
 
         await connection.query(
           `INSERT INTO product_vehicle_compatibility
-       (product_id, vehicle_generation_id, compatibility_notes)
+       (
+         product_id,
+         vehicle_generation_id,
+         compatibility_notes
+       )
        VALUES ?`,
           [compatibilityValues],
         );
@@ -634,70 +858,157 @@ export const updateProduct = async (req, res) => {
 // ------------------- OTHER CONTROLLERS (getAll, getById, delete, toggle) -------------------
 // ... keep the same as earlier
 
-export const deleteProduct = async (req, res) => {
-  const connection = await pool.getConnection();
-  try {
-    await connection.beginTransaction();
+// export const deleteProduct = async (req, res) => {
+//   const connection = await pool.getConnection();
+//   try {
+//     await connection.beginTransaction();
 
+//     const { id } = req.params;
+
+//     // Check if exists
+//     const [existing] = await connection.query(
+//       "SELECT * FROM product WHERE id = ?",
+//       [id],
+//     );
+//     if (existing.length === 0) {
+//       await connection.rollback();
+//       return res
+//         .status(404)
+//         .json({ success: false, message: "Product not found" });
+//     }
+
+//     // Get media to delete from Cloudinary (if you have a function)
+//     const [mediaRows] = await connection.query(
+//       "SELECT image_url FROM product_media WHERE product_id = ? AND image_url IS NOT NULL",
+//       [id],
+//     );
+
+//     // (Optional) Delete images from Cloudinary using image_url_id
+//     // You would call a Cloudinary destroy function here.
+
+//     // Inside deleteProduct after fetching mediaRows
+//     for (const row of mediaRows) {
+//       if (row.image_url) {
+//         try {
+//           // await cloudinary.uploader.destroy(row.image_url_id);
+//           await deleteImage(row.image_url);
+//         } catch (err) {
+//           console.error(
+//             `Failed to delete Cloudinary image ${row.image_url_id}:`,
+//             err,
+//           );
+//         }
+//       }
+//     }
+
+//     // Delete media (cascaded by FK, but we do it explicitly if needed)
+//     await connection.query("DELETE FROM product_media WHERE product_id = ?", [
+//       id,
+//     ]);
+//     // Delete product
+//     await connection.query("DELETE FROM product WHERE id = ?", [id]);
+
+//     await connection.commit();
+
+//     res.status(200).json({
+//       success: true,
+//       message: "Product deleted successfully",
+//       deletedCloudinaryIds: mediaRows
+//         .map((row) => row.image_url_id)
+//         .filter(Boolean),
+//     });
+//   } catch (error) {
+//     await connection.rollback();
+//     console.error("Error in deleteProduct:", error);
+//     res.status(500).json({ success: false, message: "Internal server error" });
+//   } finally {
+//     connection.release();
+//   }
+// };
+
+export const deleteProduct = async (req, res) => {
+  try {
     const { id } = req.params;
 
-    // Check if exists
-    const [existing] = await connection.query(
-      "SELECT * FROM product WHERE id = ?",
+    // Check if product exists
+    const [existing] = await pool.query(
+      "SELECT id, status, is_available FROM product WHERE id = ?",
       [id],
     );
+
     if (existing.length === 0) {
-      await connection.rollback();
-      return res
-        .status(404)
-        .json({ success: false, message: "Product not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Product not found",
+      });
     }
 
-    // Get media to delete from Cloudinary (if you have a function)
-    const [mediaRows] = await connection.query(
-      "SELECT image_url_id FROM product_media WHERE product_id = ? AND image_url_id IS NOT NULL",
+    // Soft delete (deactivate product)
+    await pool.query(
+      `
+      UPDATE product
+      SET
+        status = 'inactive',
+        is_available = 0
+      WHERE id = ?
+      `,
       [id],
     );
 
-    // (Optional) Delete images from Cloudinary using image_url_id
-    // You would call a Cloudinary destroy function here.
-
-    // Inside deleteProduct after fetching mediaRows
-    for (const row of mediaRows) {
-      if (row.image_url_id) {
-        try {
-          await cloudinary.uploader.destroy(row.image_url_id);
-        } catch (err) {
-          console.error(
-            `Failed to delete Cloudinary image ${row.image_url_id}:`,
-            err,
-          );
-        }
-      }
-    }
-
-    // Delete media (cascaded by FK, but we do it explicitly if needed)
-    await connection.query("DELETE FROM product_media WHERE product_id = ?", [
-      id,
-    ]);
-    // Delete product
-    await connection.query("DELETE FROM product WHERE id = ?", [id]);
-
-    await connection.commit();
-
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: "Product deleted successfully",
-      deletedCloudinaryIds: mediaRows
-        .map((row) => row.image_url_id)
-        .filter(Boolean),
+      message: "Product has been deactivated successfully",
     });
   } catch (error) {
-    await connection.rollback();
     console.error("Error in deleteProduct:", error);
-    res.status(500).json({ success: false, message: "Internal server error" });
-  } finally {
-    connection.release();
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  }
+};
+
+export const restoreProduct = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Check if product exists
+    const [existing] = await pool.query(
+      "SELECT id, status, is_available FROM product WHERE id = ?",
+      [id],
+    );
+
+    if (existing.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Product not found",
+      });
+    }
+
+    // Restore product
+    await pool.query(
+      `
+      UPDATE product
+      SET
+        status = 'active',
+        is_available = 1
+      WHERE id = ?
+      `,
+      [id],
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Product restored successfully",
+    });
+  } catch (error) {
+    console.error("Error in restoreProduct:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
   }
 };
 

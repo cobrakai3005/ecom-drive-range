@@ -1,5 +1,6 @@
 import { pool } from "../config/db.js";
 import { logAudit } from "../lib/auditLog.js";
+import { deleteImage } from "../utils/deleteImages.js";
 
 const generateSlug = (name) => {
   return name
@@ -46,8 +47,12 @@ export const getAllMakes = async (req, res) => {
     const params = [];
 
     // Always add status filter unless explicitly set to 'all'
-    if (status !== "all") {
+    if (status === "deleted") {
+      conditions.push("status = 'inactive'");
+      conditions.push("is_deleted = 1");
+    } else if (status !== "all") {
       conditions.push("status = ?");
+      conditions.push("is_deleted = 0");
       params.push(status);
     }
 
@@ -104,7 +109,7 @@ export const getMakeByIdOrSlug = async (req, res) => {
   try {
     const field = isNumeric ? "p.id" : "p.slug";
     const [rows] = await pool.query(
-      `SELECT * FROM vehicle_makes WHERE ${field} = ?`,
+      `SELECT * FROM vehicle_makes WHERE ${field} = ? and is_deleted = 0`,
       [identifier],
     );
     if (rows.length === 0) {
@@ -129,10 +134,10 @@ export const createMake = async (req, res) => {
   }
   let slug = generateSlug(name);
   slug = await makeSlugUnique(slug);
-  let logo_url = null;
-  if (req.file) {
-    logo_url = req.file.path;
-  }
+  const logo_url = req.file
+    ? `${req.protocol}://${req.get("host")}/uploads/brands/${req.file.filename}`
+    : null;
+
   try {
     const [result] = await pool.query(
       "INSERT INTO vehicle_makes (name, logo_url, country, slug) VALUES (?, ?, ?, ?)",
@@ -166,7 +171,7 @@ export const createMake = async (req, res) => {
 // ========== UPDATE vehicle make ==========
 export const updateMake = async (req, res) => {
   const { id } = req.params;
-  const { name, logo_url, country, status } = req.body;
+  const { name, country, status } = req.body;
   try {
     const [existing] = await pool.query(
       "SELECT * FROM vehicle_makes WHERE id = ?",
@@ -177,6 +182,21 @@ export const updateMake = async (req, res) => {
         .status(404)
         .json({ success: false, message: "Vehicle make not found" });
     }
+    let logo_url = null;
+    if (req.file) {
+      // Delete old logo from Cloudinary
+      if (existing[0].logo_url) {
+        // const publicId = existing[0].logo_url
+        //   .split("/")
+        //   .slice(-2)
+        //   .join("/")
+        //   .split(".")[0];
+        // await cloudinary.uploader.destroy(publicId);
+        await deleteImage(existing[0].logo_url);
+      }
+      logo_url = `${req.protocol}://${req.get("host")}/uploads/vehicle_makes/${req.file.filename}`;
+    }
+
     let slug = existing[0].slug;
     if (name && name !== existing[0].name) {
       slug = generateSlug(name);
@@ -230,7 +250,29 @@ export const deleteMake = async (req, res) => {
         .status(404)
         .json({ success: false, message: "Vehicle make not found" });
     }
-    await pool.query("DELETE FROM vehicle_makes WHERE id = ?", [id]);
+
+    if (existing[0].is_deleted === 1) {
+      return res.status(400).json({
+        success: false,
+        message: "Vehicle Makes is already deleted",
+      });
+    }
+
+    const [result] = await pool.query(
+      `UPDATE  vehicle_makes
+      SET
+        is_deleted = 1,
+        status = 'inactive'
+      WHERE id = ?`,
+      [id],
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Vehicle Makes could not be deleted",
+      });
+    }
     await logAudit({
       userId: req.user.id,
       action: "DELETE_VEHICLE_MAKE",
@@ -246,3 +288,122 @@ export const deleteMake = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
+
+export const restoreMake = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const [existing] = await pool.query(
+      `
+      SELECT *
+      FROM vehicle_makes
+      WHERE id = ?
+      LIMIT 1
+      `,
+      [id],
+    );
+
+    if (existing.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Vehicle make not found",
+      });
+    }
+
+    if (Number(existing[0].is_deleted) === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Vehicle make is not deleted",
+      });
+    }
+
+    const [result] = await pool.query(
+      `
+      UPDATE vehicle_makes
+      SET
+        is_deleted = 0,
+        status = 'active'
+      WHERE id = ?
+        AND is_deleted = 1
+      `,
+      [id],
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Vehicle make could not be restored",
+      });
+    }
+
+    const newData = {
+      ...existing[0],
+      is_deleted: 0,
+      status: "active",
+    };
+
+    await logAudit({
+      userId: req.user.id,
+      action: "RESTORE_VEHICLE_MAKE",
+      tableName: "vehicle_makes",
+      recordId: id,
+      oldData: existing[0],
+      newData,
+      req,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Vehicle make restored successfully",
+    });
+  } catch (error) {
+    console.error("Error in restoreMake:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  }
+};
+// export const deleteMake = async (req, res) => {
+//   const { id } = req.params;
+//   try {
+//     const [models] = await pool.query(
+//       "SELECT id FROM vehicle_models WHERE make_id = ? LIMIT 1",
+//       [id],
+//     );
+//     if (models.length > 0) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Cannot delete make because it has associated models",
+//       });
+//     }
+//     const [existing] = await pool.query(
+//       "SELECT * FROM vehicle_makes WHERE id = ?",
+//       [id],
+//     );
+//     if (existing.length === 0) {
+//       return res
+//         .status(404)
+//         .json({ success: false, message: "Vehicle make not found" });
+//     }
+
+//     if (existing[0].logo_url) {
+//       await deleteImage(brand[0].logo_url);
+//     }
+//     await pool.query("DELETE FROM vehicle_makes WHERE id = ?", [id]);
+//     await logAudit({
+//       userId: req.user.id,
+//       action: "DELETE_VEHICLE_MAKE",
+//       tableName: "vehicle_makes",
+//       recordId: id,
+//       oldData: existing[0],
+//       newData: null,
+//       req,
+//     });
+//     res.json({ success: true, message: "Vehicle make deleted" });
+//   } catch (error) {
+//     console.error(error);
+//     res.status(500).json({ success: false, message: "Server error" });
+//   }
+// };

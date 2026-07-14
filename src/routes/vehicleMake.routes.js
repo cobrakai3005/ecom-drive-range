@@ -5,10 +5,14 @@ import {
   createMake,
   updateMake,
   deleteMake,
+  restoreMake,
 } from "../controllers/vehicleMake.controller.js";
 import verifyToken from "../middlewares/auth.middleware.js";
 import { authorize } from "../middlewares/authorize.middleware.js";
-import upload from "../middlewares/multer.middleware.js";
+// import upload from "../middlewares/multer.middleware.js";
+const upload = createUpload("vehicle_makes");
+
+import createUpload from "../middlewares/multer.middleware.js";
 const router = express.Router();
 
 // Public routes (read-only)
@@ -47,5 +51,6 @@ router.put(
   updateMake,
 );
 router.delete("/delete_make/:id", verifyToken, authorize("Admin"), deleteMake);
+router.get("/restore/:id", verifyToken, authorize("Admin"), restoreMake);
 
 export default router;

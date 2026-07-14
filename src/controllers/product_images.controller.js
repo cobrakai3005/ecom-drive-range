@@ -1,7 +1,7 @@
 // controllers/productImageController.js
 import { pool } from "../config/db.js";
 import cloudinary from "../config/cloudinary.js";
-
+import { deleteImage } from "../utils/deleteImages.js";
 // GET images for a product (sorted by sort_order, with status filtering)
 export const getProductImages = async (req, res) => {
   const { productId } = req.params;
@@ -105,17 +105,16 @@ export const addProductImages = async (req, res) => {
     const { sort_order = 0, status = "active" } = req.body;
 
     // Prepare insert values for all images
-    const imagesData = req.files.map((file) => [
+    const imagesData = req.files?.map((file) => [
       productId,
-      file.path, // or file.location if using cloud storage
-      file.filename,
-      sort_order,
-      status,
+      `${req.protocol}://${req.get("host")}/uploads/products/${file.filename}`,
+      0,
+      "active",
     ]);
 
     // Bulk insert
     const [result] = await pool.query(
-      `INSERT INTO product_media (product_id, image_url,image_url_id, sort_order, status) VALUES ?`,
+      `INSERT INTO product_media (product_id, image_url, sort_order, status) VALUES ?`,
       [imagesData],
     );
 
@@ -219,14 +218,12 @@ export const hardDeleteProductImage = async (req, res) => {
     }
 
     // Delete from Cloudinary
-    if (image[0].image_url_id) {
+    if (image[0].image_url) {
       try {
-        await cloudinary.uploader.destroy(row.image_url_id);
+        // await cloudinary.uploader.destroy(row.image_url_id);
+        await deleteImage(image[0].image_url);
       } catch (err) {
-        console.error(
-          `Failed to delete Cloudinary image ${row.image_url_id}:`,
-          err,
-        );
+        console.error(`Failed to delete  image ${row.image_url}:`, err);
       }
     }
 

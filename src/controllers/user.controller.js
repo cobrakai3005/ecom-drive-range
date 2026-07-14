@@ -1,6 +1,6 @@
 import { pool } from "../config/db.js";
 import cloudinary from "../config/cloudinary.js";
-
+import { deleteImage } from "../utils/deleteImages.js";
 // ========== CREATE USER (no OTP) ==========
 export const createUser = async (req, res) => {
   try {
@@ -27,9 +27,12 @@ export const createUser = async (req, res) => {
       });
     }
 
-    const profile_image = req.file?.path || null;
-    const profile_image_id = req.file?.filename || null;
+    // const profile_image = req.file?.path || null;
+    // const profile_image_id = req.file?.filename || null;
 
+    const profile_image = req.file
+      ? `${req.protocol}://${req.get("host")}/uploads/profile_images/${req.file.filename}`
+      : null;
     // --- check existing ---
     const [existing] = await pool.query(
       "SELECT id FROM users WHERE phone = ? OR email = ?",
@@ -44,15 +47,15 @@ export const createUser = async (req, res) => {
 
     const insertQuery = `
       INSERT INTO users 
-        (full_name, email, profile_image, phone, profile_image_id, password, role)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+        (full_name, email, profile_image, phone,  password, role)
+      VALUES (?, ?, ?, ?, ?, ?)
     `;
     const [result] = await pool.query(insertQuery, [
       full_name,
       email,
       profile_image,
       phone,
-      profile_image_id,
+
       password,
       role,
     ]);
@@ -117,7 +120,7 @@ export const getAllUsers = async (req, res) => {
     // Fetch data
     const dataQuery = `
       SELECT id, role, profile_image, phone, full_name, email,is_delete,
-             otp_verify, profile_image_id, created_at, updated_at
+             otp_verify, created_at, updated_at
       FROM users 
       ${whereClause}
       ORDER BY created_at DESC
@@ -148,7 +151,7 @@ export const getUserById = async (req, res) => {
   try {
     const [rows] = await pool.query(
       `SELECT id, role, profile_image, phone, full_name, email,
-              otp_verify, profile_image_id, created_at, updated_at
+              otp_verify, created_at, updated_at
        FROM users 
        WHERE id = ? AND is_delete = FALSE`,
       [id],
@@ -291,7 +294,7 @@ export const updateProfile = async (req, res) => {
 
     // --- Step 1: Get current user data ---
     const [currentRows] = await pool.query(
-      `SELECT id, full_name, profile_image, profile_image_id 
+      `SELECT id, full_name, profile_image
        FROM users WHERE id = ? AND is_delete = FALSE`,
       [userId],
     );
@@ -323,26 +326,30 @@ export const updateProfile = async (req, res) => {
     addFieldIfChanged("full_name", full_name, currentUser.full_name);
 
     // --- Step 3: Handle profile image (if a new file is uploaded) ---
-    let oldImageId = currentUser.profile_image_id;
+    let oldImage = currentUser.profile_image;
 
     if (file) {
       try {
         // Delete old image from Cloudinary if it exists
-        if (oldImageId) {
-          await cloudinary.uploader.destroy(oldImageId);
+        if (oldImage) {
+          // await cloudinary.uploader.destroy(oldImageId);
+          await deleteImage(oldImage);
         }
 
         // Upload the new file to Cloudinary
-        const uploadResult = await cloudinary.uploader.upload(
-          file.path || file.buffer,
-          {
-            folder: "profile_images",
-            public_id: `user_${userId}_${Date.now()}`,
-          },
-        );
+        // const uploadResult = await cloudinary.uploader.upload(
+        //   file.path || file.buffer,
+        //   {
+        //     folder: "profile_images",
+        //     public_id: `user_${userId}_${Date.now()}`,
+        //   },
+        // );
+        const uploadResult = req.file
+          ? `${req.protocol}://${req.get("host")}/uploads/profile_images/${req.file.filename}`
+          : null;
 
-        fields.push("profile_image = ?", "profile_image_id = ?");
-        values.push(uploadResult.secure_url, uploadResult.public_id);
+        fields.push("profile_image = ?");
+        values.push(uploadResult);
       } catch (uploadError) {
         console.error("Cloudinary error:", uploadError);
         return res.status(500).json({

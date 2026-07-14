@@ -19,8 +19,7 @@ export const addReview = async (req, res) => {
 
   const images =
     req.files?.map((file) => ({
-      url: file.path,
-      public_id: file.filename, // or file.public_id depending on your configuration
+      url: `${req.protocol}://${req.get("host")}/uploads/product_reviews/${file.filename}`,
     })) || [];
 
   try {
@@ -402,6 +401,7 @@ export const getFeaturedReviews = async (req, res) => {
 
 // User: Delete own review
 import cloudinary from "../config/cloudinary.js";
+import { deleteImage } from "../utils/deleteImages.js";
 
 export const deleteReview = async (req, res) => {
   const { id } = req.params;
@@ -443,9 +443,10 @@ export const deleteReview = async (req, res) => {
     // Delete Cloudinary images
     await Promise.all(
       images.map(async (image) => {
-        if (image.public_id) {
+        if (image.url) {
           try {
-            await cloudinary.uploader.destroy(image.public_id);
+            // await cloudinary.uploader.destroy(image.public_id);
+            await deleteImage(image.url);
           } catch (err) {
             console.error(`Failed to delete image ${image.public_id}:`, err);
           }

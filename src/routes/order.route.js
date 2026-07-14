@@ -6,6 +6,8 @@ import {
   getAllOrders,
   initiateRazorpayCheckout,
   verifyRazorpayAndCreateOrder,
+  getOrderDashboardStats,
+  updateOrderAddresses,
 } from "../controllers/orders.controller.js";
 import verifyToken from "../middlewares/auth.middleware.js";
 import { authorize } from "../middlewares/authorize.middleware.js";
@@ -13,6 +15,7 @@ import { authorize } from "../middlewares/authorize.middleware.js";
 const router = express.Router();
 
 // User routes
+router.get("/dashboard-stats", verifyToken, getOrderDashboardStats);
 router.post("/create", verifyToken, initiateRazorpayCheckout);
 router.get("/my-orders", verifyToken, getUserOrders);
 router.post("/verify-payment", verifyToken, verifyRazorpayAndCreateOrder);
@@ -27,5 +30,10 @@ router.put(
   authorize("Admin", "Staff"),
   updateOrderStatus,
 );
-
+router.put(
+  "/update-address/:id",
+  verifyToken,
+  authorize("Customer"),
+  updateOrderAddresses,
+);
 export default router;

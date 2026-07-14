@@ -13,7 +13,8 @@ import {
   deleteReviewImages,
   getFeaturedReviews,
 } from "../controllers/reviews.controller.js";
-import upload from "../middlewares/multer.middleware.js";
+import createUpload from "../middlewares/multer.middleware.js";
+const upload = createUpload("product_reviews");
 
 const router = express.Router();
 

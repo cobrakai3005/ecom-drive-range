@@ -3,6 +3,7 @@ import { generateOtp } from "../lib/otp.js";
 import jwt from "jsonwebtoken";
 import cloudinary from "../config/cloudinary.js";
 import { sendOTPEmail } from "../services/nodemailer.service.js";
+import { deleteImage } from "../utils/deleteImages.js";
 const fiveMinutes = 1 * 60 * 1000;
 
 export const getMe = (req, res) => {
@@ -10,6 +11,7 @@ export const getMe = (req, res) => {
 };
 export const registerController = async (req, res) => {
   try {
+    console.log(req.file);
     const { phone, email, password, full_name } = req?.body;
 
     if (!email || !phone || !password || !full_name) {
@@ -33,8 +35,12 @@ export const registerController = async (req, res) => {
       });
     }
 
-    const profile_image = req.file?.path || null;
-    const profile_image_id = req.file?.filename || null;
+    // const profile_image = req.file?.path || null;
+    // const profile_image_id = req.file?.filename || null;
+
+    const profile_image = req.file
+      ? `${req.protocol}://${req.get("host")}/uploads/profile_images/${req.file.filename}`
+      : null;
     // Check if user already exists
     const getUserbyPhoneAndEmail = `SELECT * FROM users WHERE phone = ? OR email = ?`;
     const [userRows] = await pool.query(getUserbyPhoneAndEmail, [phone, email]);
@@ -49,8 +55,8 @@ export const registerController = async (req, res) => {
     const otpExpire = new Date(Date.now() + fiveMinutes);
     // Insert new user
     const insertQuery = `
-             INSERT INTO users (full_name, email, profile_image, phone, otp, otp_expire, profile_image_id, password)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             INSERT INTO users (full_name, email, profile_image, phone, otp, otp_expire, password)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
          `;
     const [result] = await pool.query(insertQuery, [
       full_name,
@@ -59,7 +65,6 @@ export const registerController = async (req, res) => {
       phone,
       otp,
       otpExpire,
-      profile_image_id,
       password,
     ]);
 
@@ -456,10 +461,13 @@ export const forgetPassword = async (req, res) => {
 export const updateProfileImage = async (req, res) => {
   try {
     const userId = req.user.id;
-    const profile_image = req.file?.path;
-    const profile_image_id = req.file?.filename;
+    // const profile_image = req.file?.path;
+    // const profile_image_id = req.file?.filename;
+    const profile_image = req.file
+      ? `${req.protocol}://${req.get("host")}/uploads/profile_images/${req.file.filename}`
+      : null;
 
-    if (!profile_image || !profile_image_id) {
+    if (!profile_image) {
       return res.status(400).json({
         success: false,
         message: "Please upload a profile image",
@@ -488,14 +496,15 @@ export const updateProfileImage = async (req, res) => {
     }
 
     // Delete old image from cloudinary if exists
-    if (existingUser.profile_image_id) {
-      await cloudinary.uploader.destroy(existingUser.profile_image_id);
+    if (existingUser.profile_image) {
+      // await cloudinary.uploader.destroy(existingUser.profile_image_id);
+      await deleteImage(existingUser.profile_image);
     }
 
-    await pool.query(
-      `UPDATE users SET profile_image = ?, profile_image_id = ? WHERE id = ?`,
-      [profile_image, profile_image_id, userId],
-    );
+    await pool.query(`UPDATE users SET profile_image = ? WHERE id = ?`, [
+      profile_image,
+      userId,
+    ]);
 
     // Fetch updated user
     const [updatedRows] = await pool.query(`SELECT * FROM users WHERE id = ?`, [

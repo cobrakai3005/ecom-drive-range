@@ -4,13 +4,12 @@ const router = express.Router();
 import * as subcategoryController from "../controllers/subcategory.controller.js";
 import verifyToken from "../middlewares/auth.middleware.js";
 import { authorize } from "../middlewares/authorize.middleware.js";
-import upload from "../middlewares/multer.middleware.js";
+// import upload from "../middlewares/multer.middleware.js";
+import createUpload from "../middlewares/multer.middleware.js";
 
-router.get(
-  "/get_all_subcategories",
+const upload = createUpload("subcategories");
 
-  subcategoryController.getAllSubcategories,
-);
+router.get("/get_all_subcategories", subcategoryController.getAllSubcategories);
 router.get(
   "/get_subcategory_by_id/:id",
   verifyToken,
@@ -65,6 +64,13 @@ router.patch(
   verifyToken,
   authorize("Admin"),
   subcategoryController.toggleSubcategoryStatus,
+);
+
+router.get(
+  "/restore/:id",
+  verifyToken,
+  authorize("Admin"),
+  subcategoryController.restoreSubcategory,
 );
 
 export default router;

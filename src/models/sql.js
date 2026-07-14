@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS categories (
     image_url VARCHAR(255),
  
     is_front BOOLEAN DEFAULT 0 NOT NULL ,
+
      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     status ENUM('active', 'inactive') DEFAULT 'active'
@@ -319,8 +320,8 @@ CREATE TABLE IF NOT EXISTS coupons (
     max_discount_amount DECIMAL(10,2) NULL,         -- for percentage coupons, max discount cap
     usage_limit_per_user INT DEFAULT 1,             -- how many times one user can use this coupon
     total_usage_limit INT NULL,                     -- global usage limit (across all users)
-    valid_from TIMESTAMP NOT NULL,
-    valid_to TIMESTAMP NOT NULL,
+     valid_from DATETIME NOT NULL,
+ valid_to DATETIME NOT NULL,
     description TEXT NULL,
     is_active tinyint(1) DEFAULT true,
     created_by_user_id INT NULL,                    -- admin who created it (or system)
@@ -608,8 +609,8 @@ CREATE TABLE IF NOT EXISTS categories (
     name VARCHAR(100) NOT NULL,
     description TEXT,
     image_url VARCHAR(255),
- 
-    is_front BOOLEAN DEFAULT 0 NOT NULL ,
+    is_front BOOLEAN DEFAULT 0 NOT NULL,
+    is_deleted TINYINT NOT NULL DEFAULT 0,
     status ENUM('active', 'inactive') DEFAULT 'active'
 );
 
@@ -623,7 +624,7 @@ CREATE TABLE IF NOT EXISTS subcategory (
     description TEXT,
     image_url VARCHAR(255),
     is_front TINYINT(1) DEFAULT 0 NOT NULL, 
-
+    is_deleted TINYINT NOT NULL DEFAULT 0,
     status ENUM('active', 'inactive') DEFAULT 'active',
     FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE RESTRICT ON UPDATE CASCADE
 );
@@ -636,7 +637,8 @@ CREATE TABLE IF NOT EXISTS brands (
     name VARCHAR(100) NOT NULL,
     logo_url VARCHAR(255),
     website VARCHAR(255),
-    status ENUM('active', 'inactive') DEFAULT 'active' NOT NULL
+    status ENUM('active', 'inactive') DEFAULT 'active' NOT NULL,
+    is_deleted TINYINT NOT NULL DEFAULT 0
 );
 
 -- ===========================================

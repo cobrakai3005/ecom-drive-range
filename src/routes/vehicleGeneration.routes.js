@@ -6,6 +6,7 @@ import {
   updateGeneration,
   deleteGeneration,
   getAvailableVehicleGenerations,
+  restoreGeneration,
 } from "../controllers/vehicleGeneration.controller.js";
 import verifyToken from "../middlewares/auth.middleware.js";
 import { authorize } from "../middlewares/authorize.middleware.js";
@@ -40,5 +41,6 @@ router.delete(
   authorize("Admin"),
   deleteGeneration,
 );
+router.get("/restore/:id", verifyToken, authorize("Admin"), restoreGeneration);
 
 export default router;

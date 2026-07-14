@@ -122,6 +122,7 @@ export const getAddressById = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
+
 export const createAddress = async (req, res) => {
   try {
     const { role, id: userIdFromToken } = req.user;
@@ -231,6 +232,7 @@ export const createAddress = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
+
 export const updateAddress = async (req, res) => {
   try {
     const { addressId } = req.params;
@@ -359,4 +361,5 @@ export const deleteAddress = async (req, res) => {
     });
   }
 };
+
 export const deleveryAddress = async (req, res) => {};

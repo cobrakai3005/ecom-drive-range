@@ -516,12 +516,6 @@ export const verifyRazorpayAndCreateOrder = async (req, res) => {
         tax_amount: itemTax,
       };
 
-      console.log("ORDER ITEM TAX DEBUG:", {
-        product_id: item.product_id,
-        raw_tax_percentage: item.tax_percentage,
-        parsed_tax_percentage: parseFloat(item.tax_percentage),
-        itemTax,
-      });
       await connection.query(
         //     `INSERT INTO order_items
         //    (order_id, product_id, quantity, unit_price, total_price,
@@ -600,7 +594,50 @@ export const verifyRazorpayAndCreateOrder = async (req, res) => {
       JSON.stringify([]),
       cartId,
     ]);
+    const [customerRows] = await connection.query(
+      `SELECT full_name, email
+   FROM users
+   WHERE id = ?
+   LIMIT 1`,
+      [userId],
+    );
 
+    if (!customerRows.length) {
+      await connection.rollback();
+
+      return res.status(400).json({
+        success: false,
+        message: "Customer not found",
+      });
+    }
+
+    const customer = customerRows[0];
+
+    // Email Order Details
+
+    const emailOrderDetails = {
+      order_id: orderId,
+      order_date: new Date(),
+      order_status: "pending",
+
+      customer_name: customer.full_name,
+
+      items: items.map((item) => ({
+        product_name: item.product_name,
+        quantity: Number(item.quantity),
+        unit_price: Number(item.unit_price),
+      })),
+
+      subtotal: Number(subtotal),
+      shipping_cost: Number(shipping_cost),
+      tax_amount: Number(tax_amount),
+      discount_amount: Number(discount_amount),
+      total_amount: Number(total_amount),
+
+      currency_code: "INR",
+      shipping_address: fullAddressString,
+      customer_notes: notes.customer_notes || null,
+    };
     await connection.commit();
 
     // Respond before sending email
@@ -614,8 +651,10 @@ export const verifyRazorpayAndCreateOrder = async (req, res) => {
     });
 
     // Fire-and-forget confirmation email
-    sendOrderConfirmationEmail({ orderId, userId, total_amount }).catch((err) =>
-      console.error("Order email error:", err),
+    sendOrderConfirmationEmail(customer.email, emailOrderDetails).catch(
+      (error) => {
+        console.error("Order confirmation email failed:", error.message);
+      },
     );
   } catch (error) {
     await connection.rollback();
@@ -842,10 +881,11 @@ export const getAllOrders = async (req, res) => {
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 10;
   const offset = (page - 1) * limit;
-  const status = req.query.status;
 
-  let whereClause = "";
-  let params = [];
+  const { status, from_date, to_date } = req.query;
+
+  const conditions = [];
+  const params = [];
 
   if (
     status &&
@@ -859,27 +899,44 @@ export const getAllOrders = async (req, res) => {
       "refunded",
     ].includes(status)
   ) {
-    whereClause = "WHERE o.order_status = ?";
+    conditions.push("o.order_status = ?");
     params.push(status);
   }
+
+  if (from_date) {
+    conditions.push("DATE(o.order_date) >= ?");
+    params.push(from_date);
+  }
+
+  if (to_date) {
+    conditions.push("DATE(o.order_date) <= ?");
+    params.push(to_date);
+  }
+
+  const whereClause =
+    conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
   try {
     // Get total count
     const [countResult] = await pool.query(
-      `SELECT COUNT(*) as total FROM orders o ${whereClause}`,
+      `SELECT COUNT(*) AS total
+       FROM orders o
+       ${whereClause}`,
       params,
     );
+
     const total = countResult[0].total;
 
-    // Get orders with user and address details
+    // Get orders
     const [orders] = await pool.query(
-      `SELECT 
+      `SELECT
         o.*,
         u.full_name as customer_name,
         u.email as customer_email,
         u.phone as customer_phone,
         u.profile_image as customer_profile_image,
         u.role as customer_role,
+
         -- Shipping Address
         sa.full_name as shipping_full_name,
         sa.phone as shipping_phone,
@@ -899,6 +956,7 @@ export const getAllOrders = async (req, res) => {
           sa.postal_code,
           sa.country
         ) as shipping_full_address,
+
         -- Billing Address
         ba.full_name as billing_full_name,
         ba.phone as billing_phone,
@@ -918,16 +976,18 @@ export const getAllOrders = async (req, res) => {
           ba.postal_code,
           ba.country
         ) as billing_full_address
+
       FROM orders o
       LEFT JOIN users u ON o.user_id = u.id
       LEFT JOIN user_addresses sa ON o.shipping_address_id = sa.id
       LEFT JOIN user_addresses ba ON o.billing_address_id = ba.id
+
       ${whereClause}
+
       ORDER BY o.order_date DESC
       LIMIT ? OFFSET ?`,
       [...params, limit, offset],
     );
-
     // Get order items for all orders
     const orderIds = orders.map((order) => order.id);
     let orderItemsMap = {};
@@ -1068,5 +1128,713 @@ export const getAllOrders = async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+// export const getAllOrders = async (req, res) => {
+//   const page = parseInt(req.query.page) || 1;
+//   const limit = parseInt(req.query.limit) || 10;
+//   const offset = (page - 1) * limit;
+//   const status = req.query.status;
+
+//   let whereClause = "";
+//   let params = [];
+
+//   if (
+//     status &&
+//     [
+//       "pending",
+//       "confirmed",
+//       "processing",
+//       "shipped",
+//       "delivered",
+//       "cancelled",
+//       "refunded",
+//     ].includes(status)
+//   ) {
+//     whereClause = "WHERE o.order_status = ?";
+//     params.push(status);
+//   }
+
+//   try {
+//     // Get total count
+//     const [countResult] = await pool.query(
+//       `SELECT COUNT(*) as total FROM orders o ${whereClause}`,
+//       params,
+//     );
+//     const total = countResult[0].total;
+
+//     // Get orders with user and address details
+//     const [orders] = await pool.query(
+//       `SELECT
+//         o.*,
+//         u.full_name as customer_name,
+//         u.email as customer_email,
+//         u.phone as customer_phone,
+//         u.profile_image as customer_profile_image,
+//         u.role as customer_role,
+//         -- Shipping Address
+//         sa.full_name as shipping_full_name,
+//         sa.phone as shipping_phone,
+//         sa.line1 as shipping_line1,
+//         sa.line2 as shipping_line2,
+//         sa.landmark as shipping_landmark,
+//         sa.city as shipping_city,
+//         sa.state as shipping_state,
+//         sa.postal_code as shipping_postal_code,
+//         sa.country as shipping_country,
+//         CONCAT_WS(', ',
+//           sa.line1,
+//           sa.line2,
+//           sa.landmark,
+//           sa.city,
+//           sa.state,
+//           sa.postal_code,
+//           sa.country
+//         ) as shipping_full_address,
+//         -- Billing Address
+//         ba.full_name as billing_full_name,
+//         ba.phone as billing_phone,
+//         ba.line1 as billing_line1,
+//         ba.line2 as billing_line2,
+//         ba.landmark as billing_landmark,
+//         ba.city as billing_city,
+//         ba.state as billing_state,
+//         ba.postal_code as billing_postal_code,
+//         ba.country as billing_country,
+//         CONCAT_WS(', ',
+//           ba.line1,
+//           ba.line2,
+//           ba.landmark,
+//           ba.city,
+//           ba.state,
+//           ba.postal_code,
+//           ba.country
+//         ) as billing_full_address
+//       FROM orders o
+//       LEFT JOIN users u ON o.user_id = u.id
+//       LEFT JOIN user_addresses sa ON o.shipping_address_id = sa.id
+//       LEFT JOIN user_addresses ba ON o.billing_address_id = ba.id
+//       ${whereClause}
+//       ORDER BY o.order_date DESC
+//       LIMIT ? OFFSET ?`,
+//       [...params, limit, offset],
+//     );
+
+//     // Get order items for all orders
+//     const orderIds = orders.map((order) => order.id);
+//     let orderItemsMap = {};
+
+//     if (orderIds.length > 0) {
+//       // Get all order items with product details (now directly from product table)
+//       const [items] = await pool.query(
+//         `SELECT
+//           oi.id,
+//           oi.order_id,
+//           oi.product_id,
+//           oi.quantity,
+//           oi.unit_price,
+//           oi.total_price,
+//           oi.product_data_snapshot as product_snapshot,
+//           p.name as product_name,
+//           p.slug as product_slug,
+//           p.status as product_status,
+//           p.sku as product_sku,
+//           p.price as current_price,
+//           p.weight,
+//           p.width,
+//           p.height,
+//           p.depth,
+//           p.is_available,
+//           p.available_stock
+//         FROM order_items oi
+//         LEFT JOIN product p ON oi.product_id = p.id
+//         WHERE oi.order_id IN (?)
+//         ORDER BY oi.order_id, oi.id`,
+//         [orderIds],
+//       );
+
+//       // Group items by order_id
+//       orderItemsMap = items.reduce((acc, item) => {
+//         if (!acc[item.order_id]) {
+//           acc[item.order_id] = [];
+//         }
+//         // Parse the JSON snapshot or use the individual fields
+//         let productSnapshot = item.product_snapshot;
+//         if (typeof productSnapshot === "string") {
+//           try {
+//             productSnapshot = JSON.parse(productSnapshot);
+//           } catch (e) {
+//             productSnapshot = {};
+//           }
+//         }
+
+//         acc[item.order_id].push({
+//           id: item.id,
+//           product_id: item.product_id, // renamed from product_item_id
+//           quantity: item.quantity,
+//           unit_price: item.unit_price,
+//           total_price: item.total_price,
+//           product: {
+//             id: item.product_id, // product id directly
+//             name: item.product_name || productSnapshot?.product_name,
+//             slug: item.product_slug,
+//             sku: item.product_sku || productSnapshot?.sku,
+//             // variation may be stored in snapshot, if needed:
+//             variation: productSnapshot?.variation || null,
+//             status: item.product_status,
+//             current_price: item.current_price,
+//             weight: item.weight,
+//             dimensions: {
+//               width: item.width,
+//               height: item.height,
+//               depth: item.depth,
+//             },
+//             is_available: item.is_available,
+//             available_stock: item.available_stock,
+//             snapshot: productSnapshot, // Keep the full snapshot for reference
+//           },
+//         });
+//         return acc;
+//       }, {});
+//     }
+
+//     // Combine orders with their items and calculate summary
+//     const ordersWithDetails = orders.map((order) => ({
+//       ...order,
+//       items: orderItemsMap[order.id] || [],
+//       item_count: orderItemsMap[order.id]?.length || 0,
+//       summary: {
+//         subtotal: order.subtotal,
+//         shipping_cost: order.shipping_cost,
+//         tax_amount: order.tax_amount,
+//         discount_amount: order.discount_amount,
+//         total_amount: order.total_amount,
+//         currency: order.currency_code,
+//       },
+//       customer: {
+//         id: order.user_id,
+//         name: order.customer_name,
+//         email: order.customer_email,
+//         phone: order.customer_phone,
+//         profile_image: order.customer_profile_image,
+//         role: order.customer_role,
+//       },
+//       shipping_address: {
+//         id: order.shipping_address_id,
+//         full_name: order.shipping_full_name,
+//         phone: order.shipping_phone,
+//         line1: order.shipping_line1,
+//         line2: order.shipping_line2,
+//         landmark: order.shipping_landmark,
+//         city: order.shipping_city,
+//         state: order.shipping_state,
+//         postal_code: order.shipping_postal_code,
+//         country: order.shipping_country,
+//         full_address: order.shipping_full_address,
+//       },
+//       billing_address: {
+//         id: order.billing_address_id,
+//         full_name: order.billing_full_name,
+//         phone: order.billing_phone,
+//         line1: order.billing_line1,
+//         line2: order.billing_line2,
+//         landmark: order.billing_landmark,
+//         city: order.billing_city,
+//         state: order.billing_state,
+//         postal_code: order.billing_postal_code,
+//         country: order.billing_country,
+//         full_address: order.billing_full_address,
+//       },
+//     }));
+
+//     res.json({
+//       success: true,
+//       data: ordersWithDetails,
+//       pagination: {
+//         page,
+//         limit,
+//         total,
+//         totalPages: Math.ceil(total / limit),
+//       },
+//     });
+//   } catch (error) {
+//     console.error(error);
+//     res.status(500).json({ success: false, message: "Server error" });
+//   }
+// };
+
+export const getOrderDashboardStats = async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT
+        COUNT(*) AS total_orders,
+
+        SUM(CASE
+          WHEN order_status = 'pending' THEN 1
+          ELSE 0
+        END) AS pending_orders,
+
+        SUM(CASE
+          WHEN order_status = 'shipped' THEN 1
+          ELSE 0
+        END) AS shipped_orders,
+
+        SUM(CASE
+          WHEN order_status = 'delivered' THEN 1
+          ELSE 0
+        END) AS delivered_orders,
+
+        SUM(CASE
+          WHEN payment_status = 'pending' THEN 1
+          ELSE 0
+        END) AS payment_pending,
+
+        SUM(CASE
+          WHEN DATE(order_date) = CURDATE() THEN 1
+          ELSE 0
+        END) AS new_orders_today,
+
+        SUM(CASE
+          WHEN DATE(order_date) = CURDATE() THEN total_amount
+          ELSE 0
+        END) AS today_revenue
+
+      FROM orders
+    `);
+
+    const stats = rows[0];
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        total_orders: Number(stats.total_orders) || 0,
+        pending_orders: Number(stats.pending_orders) || 0,
+        shipped_orders: Number(stats.shipped_orders) || 0,
+        delivered_orders: Number(stats.delivered_orders) || 0,
+        payment_pending: Number(stats.payment_pending) || 0,
+        new_orders_today: Number(stats.new_orders_today) || 0,
+        today_revenue: Number(stats.today_revenue) || 0,
+      },
+    });
+  } catch (error) {
+    console.error("Order dashboard stats error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch order dashboard statistics",
+    });
+  }
+};
+
+function validateNewAddress(address) {
+  const requiredFields = [
+    "full_name",
+    "phone",
+    "line1",
+    "city",
+    "state",
+    "postal_code",
+  ];
+
+  for (const field of requiredFields) {
+    if (!address[field] || String(address[field]).trim() === "") {
+      return `${field} is required`;
+    }
+  }
+
+  if (!/^\d{6}$/.test(String(address.postal_code))) {
+    return "postal_code must contain exactly 6 digits";
+  }
+
+  if (!/^\d{10,15}$/.test(String(address.phone))) {
+    return "phone must contain 10 to 15 digits";
+  }
+
+  return null;
+}
+
+export const updateOrderAddresses = async (req, res) => {
+  const { id } = req.params;
+
+  const {
+    shipping_address_id,
+    billing_address_id,
+    new_shipping_address,
+    new_billing_address,
+  } = req.body;
+
+  const hasAddress =
+    shipping_address_id ||
+    billing_address_id ||
+    new_shipping_address ||
+    new_billing_address;
+
+  if (!hasAddress) {
+    return res.status(400).json({
+      success: false,
+      message:
+        "Provide at least one of: shipping_address_id, billing_address_id, new_shipping_address, or new_billing_address.",
+    });
+  }
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    const [orders] = await connection.query(
+      `SELECT
+        id,
+        user_id,
+        order_status,
+        shipping_address_id,
+        billing_address_id
+       FROM orders
+       WHERE id = ?
+       FOR UPDATE`,
+      [id],
+    );
+
+    if (orders.length === 0) {
+      await connection.rollback();
+
+      return res.status(404).json({
+        success: false,
+        message: "Order not found",
+      });
+    }
+
+    const order = orders[0];
+
+    const blockedStatuses = ["shipped", "delivered", "cancelled", "refunded"];
+
+    if (blockedStatuses.includes(order.order_status)) {
+      await connection.rollback();
+
+      return res.status(400).json({
+        success: false,
+        message: `Address cannot be changed when order status is '${order.order_status}'`,
+      });
+    }
+
+    let finalShippingAddressId = null;
+    let finalBillingAddressId = null;
+
+    // Existing shipping address
+    if (shipping_address_id) {
+      const [addresses] = await connection.query(
+        `SELECT id
+         FROM user_addresses
+         WHERE id = ?
+           AND user_id = ?
+           AND address_type = 'shipping'
+           AND is_deleted = 0`,
+        [shipping_address_id, order.user_id],
+      );
+
+      if (addresses.length === 0) {
+        await connection.rollback();
+
+        return res.status(400).json({
+          success: false,
+          message: "Invalid shipping address",
+        });
+      }
+
+      finalShippingAddressId = Number(shipping_address_id);
+    }
+
+    // Create new shipping address
+    if (new_shipping_address) {
+      const validationError = validateNewAddress(new_shipping_address);
+
+      if (validationError) {
+        await connection.rollback();
+
+        return res.status(400).json({
+          success: false,
+          message: `Shipping address: ${validationError}`,
+        });
+      }
+
+      const [result] = await connection.query(
+        `INSERT INTO user_addresses (
+          user_id,
+          address_type,
+          full_name,
+          phone,
+          line1,
+          line2,
+          landmark,
+          city,
+          state,
+          postal_code,
+          country,
+          is_default
+        )
+        VALUES (?, 'shipping', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          order.user_id,
+          new_shipping_address.full_name,
+          new_shipping_address.phone,
+          new_shipping_address.line1,
+          new_shipping_address.line2 || null,
+          new_shipping_address.landmark || null,
+          new_shipping_address.city,
+          new_shipping_address.state,
+          new_shipping_address.postal_code,
+          new_shipping_address.country || "India",
+          new_shipping_address.is_default ? 1 : 0,
+        ],
+      );
+
+      finalShippingAddressId = result.insertId;
+    }
+
+    // Existing billing address
+    if (billing_address_id) {
+      const [addresses] = await connection.query(
+        `SELECT id
+         FROM user_addresses
+         WHERE id = ?
+           AND user_id = ?
+           AND address_type = 'billing'
+           AND is_deleted = 0`,
+        [billing_address_id, order.user_id],
+      );
+
+      if (addresses.length === 0) {
+        await connection.rollback();
+
+        return res.status(400).json({
+          success: false,
+          message: "Invalid billing address",
+        });
+      }
+
+      finalBillingAddressId = Number(billing_address_id);
+    }
+
+    // Create new billing address
+    if (new_billing_address) {
+      const validationError = validateNewAddress(new_billing_address);
+
+      if (validationError) {
+        await connection.rollback();
+
+        return res.status(400).json({
+          success: false,
+          message: `Billing address: ${validationError}`,
+        });
+      }
+
+      const [result] = await connection.query(
+        `INSERT INTO user_addresses (
+          user_id,
+          address_type,
+          full_name,
+          phone,
+          line1,
+          line2,
+          landmark,
+          city,
+          state,
+          postal_code,
+          country,
+          is_default
+        )
+        VALUES (?, 'billing', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          order.user_id,
+          new_billing_address.full_name,
+          new_billing_address.phone,
+          new_billing_address.line1,
+          new_billing_address.line2 || null,
+          new_billing_address.landmark || null,
+          new_billing_address.city,
+          new_billing_address.state,
+          new_billing_address.postal_code,
+          new_billing_address.country || "India",
+          new_billing_address.is_default ? 1 : 0,
+        ],
+      );
+
+      finalBillingAddressId = result.insertId;
+    }
+
+    const updateFields = [];
+    const updateParams = [];
+
+    if (finalShippingAddressId) {
+      updateFields.push("shipping_address_id = ?");
+      updateParams.push(finalShippingAddressId);
+    }
+
+    if (finalBillingAddressId) {
+      updateFields.push("billing_address_id = ?");
+      updateParams.push(finalBillingAddressId);
+    }
+
+    if (updateFields.length === 0) {
+      await connection.rollback();
+
+      return res.status(400).json({
+        success: false,
+        message: "No valid address was provided",
+      });
+    }
+
+    updateParams.push(id);
+
+    await connection.query(
+      `UPDATE orders
+       SET ${updateFields.join(", ")}
+       WHERE id = ?`,
+      updateParams,
+    );
+    // Update shipment recipient address when shipping address changes
+    if (finalShippingAddressId) {
+      const [addressRows] = await connection.query(
+        `SELECT
+      full_name,
+      phone,
+      line1,
+      line2,
+      landmark,
+      city,
+      state,
+      postal_code,
+      country
+     FROM user_addresses
+     WHERE id = ?
+       AND user_id = ?
+       AND is_deleted = 0
+     LIMIT 1`,
+        [finalShippingAddressId, order.user_id],
+      );
+
+      if (addressRows.length === 0) {
+        await connection.rollback();
+
+        return res.status(400).json({
+          success: false,
+          message: "Updated shipping address not found",
+        });
+      }
+
+      const address = addressRows[0];
+
+      const fullAddressString = [
+        address.full_name,
+        address.line1,
+        address.line2,
+        address.landmark,
+        `${address.city}, ${address.state} - ${address.postal_code}`,
+        address.country,
+        `Phone: ${address.phone}`,
+      ]
+        .filter(Boolean)
+        .join(", ");
+
+      const [shipmentRows] = await connection.query(
+        `SELECT id, current_status
+     FROM shipments
+     WHERE order_id = ?
+     FOR UPDATE`,
+        [order.id],
+      );
+
+      if (shipmentRows.length === 0) {
+        // Create shipment if it does not exist
+        await connection.query(
+          `INSERT INTO shipments (
+        order_id,
+        recipient_address,
+        current_status
+      )
+      VALUES (?, ?, 'pending')`,
+          [order.id, fullAddressString],
+        );
+      } else {
+        // Update all shipments connected to the order
+        const [shipmentUpdateResult] = await connection.query(
+          `UPDATE shipments
+       SET recipient_address = ?
+       WHERE order_id = ?`,
+          [fullAddressString, order.id],
+        );
+
+        console.log(
+          "Updated shipment rows:",
+          shipmentUpdateResult.affectedRows,
+        );
+      }
+    }
+    const [updatedOrders] = await connection.query(
+      `SELECT
+        o.id,
+        o.user_id,
+        o.order_status,
+        o.shipping_address_id,
+        o.billing_address_id,
+
+        JSON_OBJECT(
+          'id', shipping.id,
+          'address_type', shipping.address_type,
+          'full_name', shipping.full_name,
+          'phone', shipping.phone,
+          'line1', shipping.line1,
+          'line2', shipping.line2,
+          'landmark', shipping.landmark,
+          'city', shipping.city,
+          'state', shipping.state,
+          'postal_code', shipping.postal_code,
+          'country', shipping.country
+        ) AS shipping_address,
+
+        JSON_OBJECT(
+          'id', billing.id,
+          'address_type', billing.address_type,
+          'full_name', billing.full_name,
+          'phone', billing.phone,
+          'line1', billing.line1,
+          'line2', billing.line2,
+          'landmark', billing.landmark,
+          'city', billing.city,
+          'state', billing.state,
+          'postal_code', billing.postal_code,
+          'country', billing.country
+        ) AS billing_address
+
+       FROM orders o
+
+       LEFT JOIN user_addresses shipping
+         ON shipping.id = o.shipping_address_id
+
+       LEFT JOIN user_addresses billing
+         ON billing.id = o.billing_address_id
+
+       WHERE o.id = ?`,
+      [id],
+    );
+
+    await connection.commit();
+
+    return res.status(200).json({
+      success: true,
+      message: "Order address updated successfully",
+      data: updatedOrders[0],
+    });
+  } catch (error) {
+    await connection.rollback();
+
+    console.error("Update order addresses error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update order address",
+      error: error.message,
+    });
+  } finally {
+    connection.release();
   }
 };

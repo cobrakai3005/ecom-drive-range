@@ -7,10 +7,13 @@ import {
   toggleProductStatus,
   getVehicleProducts,
   updateProduct,
+  restoreProduct,
 } from "../controllers/product.controller.js";
 import verifyToken from "../middlewares/auth.middleware.js";
 import { authorize } from "../middlewares/authorize.middleware.js";
-import upload from "../middlewares/multer.middleware.js";
+import createUpload from "../middlewares/multer.middleware.js";
+
+const upload = createUpload("products");
 const router = express.Router();
 
 router.get("/get_all_products", getAllProducts);
@@ -22,9 +25,6 @@ router.post(
   authorize("Admin"),
   (req, res, next) => {
     upload.array("product_media")(req, res, (err) => {
-
-     
-      
       if (err) {
         // Multer error (file size, type, etc.)
         return res.status(400).json({ message: err.message });
@@ -61,7 +61,7 @@ router.patch(
   authorize("Admin"),
   toggleProductStatus,
 );
-
+router.get("/restore/:id", verifyToken, authorize("Admin"), restoreProduct);
 // Product images
 
 import {

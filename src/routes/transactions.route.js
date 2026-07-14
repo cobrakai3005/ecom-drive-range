@@ -6,9 +6,11 @@ import {
   createTransaction,
   updateTransactionStatus,
   getTransactionById,
+  getTransactionDashboardStats,
 } from "../controllers/transactions.controller.js";
 
 const router = express.Router();
+router.get("/dashboard-stats", verifyToken, getTransactionDashboardStats);
 
 // @route   GET /api/transactions/order/:orderId
 // @desc    Get all transactions for an order

@@ -1,5 +1,6 @@
 import { pool } from "../config/db.js";
 import { logAudit } from "../lib/auditLog.js";
+import { deleteImage } from "../utils/deleteImages.js";
 
 // ------------------- HELPERS -------------------
 const generateSlug = (name) => {
@@ -33,31 +34,36 @@ const makeSlugUnique = async (slug, currentId = null) => {
 // ========== GET models (filter by make_id, search, status, pagination) ==========
 export const getAllModels = async (req, res) => {
   try {
-    // Pagination
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.max(1, parseInt(req.query.limit) || 10);
     const offset = (page - 1) * limit;
 
-    // Filters
     const search = req.query.search?.trim() || "";
     const make_id = req.query.make_id;
-    let status = req.query.status?.trim() || "active"; // default: active
+    const status = req.query.status?.trim() || "active";
 
-    // Validate status
-    if (status && !["active", "inactive"].includes(status)) {
+    // Include deleted as a valid filter
+    if (!["active", "inactive", "deleted"].includes(status)) {
       return res.status(400).json({
         success: false,
-        message: "status must be 'active' or 'inactive'",
+        message: "status must be 'active', 'inactive', or 'deleted'",
       });
     }
 
-    // Build WHERE conditions
     const conditions = [];
     const params = [];
 
-    // Always add status filter (no 'all' option)
-    conditions.push("m.status = ?");
-    params.push(status);
+    if (status === "deleted") {
+      conditions.push("m.status = 'inactive'");
+      conditions.push("m.is_deleted = 1");
+    } else {
+      conditions.push("m.status = ?");
+      conditions.push("m.is_deleted = 0");
+      params.push(status);
+    }
+
+    // Only include non-deleted makes
+    conditions.push("mk.is_deleted = 0");
 
     if (make_id) {
       conditions.push("m.make_id = ?");
@@ -71,30 +77,35 @@ export const getAllModels = async (req, res) => {
 
     const whereClause = `WHERE ${conditions.join(" AND ")}`;
 
-    // Count
-    const countQuery = `
-      SELECT COUNT(*) as total 
+    const joins = `
       FROM vehicle_models m
-      LEFT JOIN vehicle_makes mk ON m.make_id = mk.id
+      INNER JOIN vehicle_makes mk
+        ON m.make_id = mk.id
+    `;
+
+    const countQuery = `
+      SELECT COUNT(*) AS total
+      ${joins}
       ${whereClause}
     `;
+
     const [countResult] = await pool.query(countQuery, params);
     const totalItems = countResult[0].total;
     const totalPages = Math.ceil(totalItems / limit) || 1;
 
-    // Fetch data
     const dataQuery = `
-      SELECT m.*, mk.name as make_name
-      FROM vehicle_models m
-      LEFT JOIN vehicle_makes mk ON m.make_id = mk.id
+      SELECT
+        m.*,
+        mk.name AS make_name
+      ${joins}
       ${whereClause}
-       ORDER BY  created_at DESC, mk.name ASC, m.name ASC
+      ORDER BY m.created_at DESC, mk.name ASC, m.name ASC
       LIMIT ? OFFSET ?
     `;
-    const dataParams = [...params, limit, offset];
-    const [rows] = await pool.query(dataQuery, dataParams);
 
-    res.json({
+    const [rows] = await pool.query(dataQuery, [...params, limit, offset]);
+
+    return res.status(200).json({
       success: true,
       data: rows,
       pagination: {
@@ -107,8 +118,12 @@ export const getAllModels = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, message: "Server error" });
+    console.error("Error getting vehicle models:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
   }
 };
 // ========== GET single model by id ==========
@@ -121,7 +136,13 @@ export const getModelByIdOrSlug = async (req, res) => {
       `SELECT m.*, mk.name as make_name 
        FROM vehicle_models m
        LEFT JOIN vehicle_makes mk ON m.make_id = mk.id
-       WHERE ${field} = ?`,
+       WHERE ${field} = ?
+         AND m.is_deleted = 0
+        AND mk.is_deleted = 0
+        AND m.status = 'active'
+        AND mk.status = 'active'
+        LIMIT 1
+       `,
       [identifier],
     );
     if (rows.length === 0) {
@@ -167,7 +188,9 @@ export const createModel = async (req, res) => {
     }
 
     // Get uploaded image URL (if any)
-    const model_image_url = req.file ? req.file.path : null;
+    const model_image_url = req.file
+      ? `${req.protocol}://${req.get("host")}/uploads/brands/${req.file.filename}`
+      : null;
 
     // Use provided status, default to 'active' if not given
     const finalStatus = status || "active";
@@ -247,7 +270,8 @@ export const updateModel = async (req, res) => {
     // Handle image upload (if any)
     let model_image_url = existing[0].model_image_url; // keep old by default
     if (req.file) {
-      model_image_url = req.file.path;
+      await deleteImage(existing[0].logo_url);
+      model_image_url = `${req.protocol}://${req.get("host")}/uploads/vehicle_models/${req.file.filename}`;
       // Optional: delete old image from Cloudinary if needed
     }
 
@@ -314,41 +338,158 @@ export const updateModel = async (req, res) => {
 };
 
 // ========== DELETE model (only if no generations exist) ==========
+// export const deleteModel = async (req, res) => {
+//   const { id } = req.params;
+//   try {
+//     const [generations] = await pool.query(
+//       "SELECT id FROM vehicle_generations WHERE model_id = ? LIMIT 1",
+//       [id],
+//     );
+//     if (generations.length > 0) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Cannot delete model because it has associated generations",
+//       });
+//     }
+//     const [existing] = await pool.query(
+//       "SELECT * FROM vehicle_models WHERE id = ?",
+//       [id],
+//     );
+//     if (existing.length === 0) {
+//       return res
+//         .status(404)
+//         .json({ success: false, message: "Vehicle model not found" });
+//     }
+//     const image = existing[0].model_image_url;
+
+//     await deleteImage(image);
+//     await pool.query("DELETE FROM vehicle_models WHERE id = ?", [id]);
+//     await logAudit({
+//       userId: req.user.id,
+//       action: "DELETE_VEHICLE_MODEL",
+//       tableName: "vehicle_models",
+//       recordId: id,
+//       oldData: existing[0],
+//       newData: null,
+//       req,
+//     });
+//     res.json({ success: true, message: "Vehicle model deleted" });
+//   } catch (error) {
+//     console.error(error);
+//     res.status(500).json({ success: false, message: "Server error" });
+//   }
+// };
+
 export const deleteModel = async (req, res) => {
   const { id } = req.params;
+
   try {
-    const [generations] = await pool.query(
-      "SELECT id FROM vehicle_generations WHERE model_id = ? LIMIT 1",
+    const [existing] = await pool.query(
+      `
+      SELECT *
+      FROM vehicle_models
+      WHERE id = ?
+      LIMIT 1
+      `,
       [id],
     );
-    if (generations.length > 0) {
-      return res.status(400).json({
+
+    if (existing.length === 0) {
+      return res.status(404).json({
         success: false,
-        message: "Cannot delete model because it has associated generations",
+        message: "Vehicle model not found",
       });
     }
-    const [existing] = await pool.query(
-      "SELECT * FROM vehicle_models WHERE id = ?",
+
+    if (Number(existing[0].is_deleted) === 1) {
+      return res.status(400).json({
+        success: false,
+        message: "Vehicle model is already deleted",
+      });
+    }
+
+    const [result] = await pool.query(
+      `
+      UPDATE vehicle_models
+      SET
+        is_deleted = 1,
+        status = 'inactive'
+      WHERE id = ?
+        AND is_deleted = 0
+      `,
       [id],
     );
-    if (existing.length === 0) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Vehicle model not found" });
+
+    if (result.affectedRows === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Vehicle model could not be deleted",
+      });
     }
-    await pool.query("DELETE FROM vehicle_models WHERE id = ?", [id]);
+
+    const newData = {
+      ...existing[0],
+      is_deleted: 1,
+      status: "inactive",
+    };
+
     await logAudit({
       userId: req.user.id,
-      action: "DELETE_VEHICLE_MODEL",
+      action: "SOFT_DELETE_VEHICLE_MODEL",
       tableName: "vehicle_models",
       recordId: id,
       oldData: existing[0],
-      newData: null,
+      newData,
       req,
     });
-    res.json({ success: true, message: "Vehicle model deleted" });
+
+    return res.status(200).json({
+      success: true,
+      message: "Vehicle model deleted successfully",
+    });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, message: "Server error" });
+    console.error("Error in deleteModel:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  }
+};
+
+export const restoreModel = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const [result] = await pool.query(
+      `
+      UPDATE vehicle_models
+      SET
+        is_deleted = 0,
+        status = 'active'
+      WHERE id = ?
+        AND is_deleted = 1
+      `,
+      [id],
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Deleted vehicle model not found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Vehicle model restored successfully",
+    });
+  } catch (error) {
+    console.error("Error in restoreModel:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
   }
 };

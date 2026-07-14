@@ -8,6 +8,7 @@ import {
   applyCoupon,
   updateCouponStatus,
   deleteCoupon,
+  getCouponById,
   updateCouponTemplate,
 } from "../controllers/coupon.controller.js";
 import verifyToken from "../middlewares/auth.middleware.js";
@@ -24,6 +25,8 @@ router.post(
   authorize("Admin"),
   createCouponTemplate,
 );
+
+router.get("/get_by_id/:id", verifyToken, authorize("Admin"), getCouponById);
 router.put(
   "/update-template/:id",
   verifyToken,
