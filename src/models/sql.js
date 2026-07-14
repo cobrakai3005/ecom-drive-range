@@ -809,4 +809,16 @@ CREATE TABLE IF NOT EXISTS warranty_registrations (
     INDEX idx_status (status)
 );
 
+
+
+CREATE TABLE IF NOT EXISTS messages (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    full_name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) NOT NULL,
+    phone VARCHAR(20),
+    car_model VARCHAR(255),
+    car_year YEAR,
+    message TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 `;

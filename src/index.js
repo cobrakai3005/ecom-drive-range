@@ -26,7 +26,7 @@ app.use(
 );
 app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 //Routes Imports
-
+import messageRoute from "./routes/message.route.js";
 import authRoutes from "./routes/auth.route.js";
 import userRoutes from "./routes/user.route.js";
 import userAddressRoutes from "./routes/user_address.route.js";
@@ -82,7 +82,7 @@ app.use("/api/vehicle-generations", vehicleGenerationRoutes);
 app.use("/api/vehicle-compatibility", vehicleCompatibilty);
 app.use("/api/shipments", shipmentsRoutes);
 // app.use("/api/website-reviews", websiteReviews);
-
+app.use("/api/messages", messageRoute);
 app.listen(port, async () => {
   await connect();
   console.log(`Server is running on PORT ${port}`);

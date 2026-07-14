@@ -48,6 +48,210 @@ const getProductMedia = async (productId) => {
 // GET /api/products
 // Query params: page, limit, search, category, brand, status, is_featured, is_front
 
+// export const getAllProducts = async (req, res) => {
+//   try {
+//     const {
+//       page = 1,
+//       limit = 10,
+//       search = "",
+//       category_id,
+//       sub_category_id,
+//       brand_id,
+//       status = "active",
+//       is_featured,
+//       is_front,
+//       sort_by = "latest",
+//     } = req.query;
+
+//     const currentPage = Math.max(1, Number(page) || 1);
+//     const currentLimit = Math.min(100, Math.max(1, Number(limit) || 10));
+//     const offset = (currentPage - 1) * currentLimit;
+
+//     // Adjust according to the role stored in your JWT
+//     const isAdmin = ["Admin", "Staff"].includes(req.user?.role);
+
+//     const whereClauses = [];
+//     const params = [];
+
+//     if (search.trim()) {
+//       whereClauses.push("(p.name LIKE ? OR p.sku LIKE ?)");
+//       params.push(`%${search.trim()}%`, `%${search.trim()}%`);
+//     }
+
+//     if (category_id) {
+//       whereClauses.push("p.category_id = ?");
+//       params.push(category_id);
+//     }
+
+//     if (sub_category_id) {
+//       whereClauses.push("p.sub_category_id = ?");
+//       params.push(sub_category_id);
+//     }
+
+//     if (brand_id) {
+//       whereClauses.push("p.brand_id = ?");
+//       params.push(brand_id);
+//     }
+
+//     if (status === "deleted") {
+//       whereClauses.push("p.status = 'inactive'");
+//       whereClauses.push("p.is_available = 0");
+//     } else if (status) {
+//       whereClauses.push("p.status = ?");
+//       params.push(status);
+//     }
+
+//     if (is_featured !== undefined) {
+//       whereClauses.push("p.is_featured = ?");
+//       params.push(Number(is_featured));
+//     }
+
+//     if (is_front !== undefined) {
+//       whereClauses.push("p.is_front = ?");
+//       params.push(Number(is_front));
+//     }
+
+//     /*
+//      * Customer panel:
+//      * Hide products when their category, subcategory, or brand
+//      * is deleted/inactive.
+//      *
+//      * Admin panel:
+//      * Do not hide them. Return deletion flags instead.
+//      */
+//     if (!isAdmin) {
+//       whereClauses.push("p.is_available = 1");
+
+//       whereClauses.push("c.is_deleted = 0");
+
+//       whereClauses.push("c.status = 'active'");
+
+//       whereClauses.push("sc.is_deleted = 0");
+//       whereClauses.push("sc.status = 'active'");
+
+//       whereClauses.push("(br.is_deleted = 0 OR br.id IS NULL)");
+//       whereClauses.push("(br.status = 'active' OR br.id IS NULL)");
+//     }
+
+//     const whereSQL = whereClauses.length
+//       ? `WHERE ${whereClauses.join(" AND ")}`
+//       : "";
+
+//     const sortOptions = {
+//       latest: "p.product_created_at DESC",
+//       oldest: "p.product_created_at ASC",
+//       price_low_high: "p.price ASC",
+//       price_high_low: "p.price DESC",
+//       name_az: "p.name ASC",
+//       name_za: "p.name DESC",
+//       stock_low_high: "p.available_stock ASC",
+//       stock_high_low: "p.available_stock DESC",
+//       featured: "p.is_featured DESC, p.product_created_at DESC",
+//     };
+
+//     const orderBy = sortOptions[sort_by] || sortOptions.latest;
+
+//     const baseJoinSQL = `
+//       FROM product p
+
+//       LEFT JOIN categories c
+//         ON p.category_id = c.id
+
+//       LEFT JOIN subcategory sc
+//         ON p.sub_category_id = sc.id
+
+//       LEFT JOIN brands br
+//         ON p.brand_id = br.id
+//     `;
+
+//     // Count must use the same JOINs and conditions as the product query
+//     const [countResult] = await pool.query(
+//       `
+//         SELECT COUNT(DISTINCT p.id) AS total
+//         ${baseJoinSQL}
+//         ${whereSQL}
+//       `,
+//       params,
+//     );
+
+//     const total = countResult[0].total;
+
+//     const [products] = await pool.query(
+//       `
+//         SELECT
+//           p.*,
+
+//           c.name AS category_name,
+//           c.status AS category_status,
+//           COALESCE(c.is_deleted, 1) AS category_is_deleted,
+
+//           sc.name AS subcategory_name,
+//           sc.status AS subcategory_status,
+//           COALESCE(sc.is_deleted, 1) AS subcategory_is_deleted,
+
+//           br.name AS brand_name,
+//           br.status AS brand_status,
+//           CASE
+//             WHEN br.id IS NULL THEN 0
+//             ELSE COALESCE(br.is_deleted, 1)
+//           END AS brand_is_deleted,
+
+//           CASE
+//             WHEN c.id IS NULL THEN
+//               'Category no longer exists'
+//             WHEN c.is_deleted = 1 THEN
+//               'Product is not deleted, but its category is deleted'
+//             WHEN c.status = 'inactive' THEN
+//               'Product is not deleted, but its category is inactive'
+//             WHEN sc.id IS NULL THEN
+//               'Subcategory no longer exists'
+//             WHEN sc.is_deleted = 1 THEN
+//               'Product is not deleted, but its subcategory is deleted'
+//             WHEN sc.status = 'inactive' THEN
+//               'Product is not deleted, but its subcategory is inactive'
+//             WHEN br.id IS NOT NULL AND br.is_deleted = 1 THEN
+//               'Product is not deleted, but its brand is deleted'
+//             WHEN br.id IS NOT NULL AND br.status = 'inactive' THEN
+//               'Product is not deleted, but its brand is inactive'
+//             ELSE NULL
+//           END AS relation_warning
+
+//         ${baseJoinSQL}
+//         ${whereSQL}
+
+//         ORDER BY ${orderBy}
+//         LIMIT ?
+//         OFFSET ?
+//       `,
+//       [...params, currentLimit, offset],
+//     );
+
+//     await Promise.all(
+//       products.map(async (product) => {
+//         product.media = await getProductMedia(product.id);
+//       }),
+//     );
+
+//     return res.status(200).json({
+//       success: true,
+//       data: products,
+//       pagination: {
+//         total,
+//         page: currentPage,
+//         limit: currentLimit,
+//         totalPages: Math.ceil(total / currentLimit),
+//       },
+//     });
+//   } catch (error) {
+//     console.error("Error in getAllProducts:", error);
+
+//     return res.status(500).json({
+//       success: false,
+//       message: "Internal server error",
+//     });
+//   }
+// };
+
 export const getAllProducts = async (req, res) => {
   try {
     const {
@@ -63,80 +267,161 @@ export const getAllProducts = async (req, res) => {
       sort_by = "latest",
     } = req.query;
 
-    const currentPage = Math.max(1, Number(page) || 1);
-    const currentLimit = Math.min(100, Math.max(1, Number(limit) || 10));
+    const currentPage = Math.max(1, parseInt(page, 10) || 1);
+    const currentLimit = Math.min(100, Math.max(1, parseInt(limit, 10) || 10));
     const offset = (currentPage - 1) * currentLimit;
 
-    // Adjust according to the role stored in your JWT
     const isAdmin = ["Admin", "Staff"].includes(req.user?.role);
 
     const whereClauses = [];
     const params = [];
 
-    if (search.trim()) {
+    // Converts true/false and 1/0 query strings into MySQL Boolean values.
+    const parseBooleanQuery = (value) => {
+      if (value === undefined || value === null || value === "") {
+        return undefined;
+      }
+
+      const normalizedValue = String(value).trim().toLowerCase();
+
+      if (["true", "1"].includes(normalizedValue)) {
+        return 1;
+      }
+
+      if (["false", "0"].includes(normalizedValue)) {
+        return 0;
+      }
+
+      return null;
+    };
+
+    /*
+     * Search
+     */
+    if (String(search).trim()) {
+      const searchValue = String(search).trim();
+
       whereClauses.push("(p.name LIKE ? OR p.sku LIKE ?)");
-      params.push(`%${search.trim()}%`, `%${search.trim()}%`);
+      params.push(`%${searchValue}%`, `%${searchValue}%`);
     }
 
+    /*
+     * Category filter
+     */
     if (category_id) {
       whereClauses.push("p.category_id = ?");
       params.push(category_id);
     }
 
+    /*
+     * Subcategory filter
+     */
     if (sub_category_id) {
       whereClauses.push("p.sub_category_id = ?");
       params.push(sub_category_id);
     }
 
+    /*
+     * Brand filter
+     */
     if (brand_id) {
       whereClauses.push("p.brand_id = ?");
       params.push(brand_id);
     }
 
+    /*
+     * Product status filter
+     */
     if (status === "deleted") {
       whereClauses.push("p.status = 'inactive'");
       whereClauses.push("p.is_available = 0");
     } else if (status) {
+      if (!["active", "inactive"].includes(status)) {
+        return res.status(400).json({
+          success: false,
+          message: "status must be active, inactive, or deleted",
+        });
+      }
+
       whereClauses.push("p.status = ?");
       params.push(status);
     }
 
-    if (is_featured !== undefined) {
-      whereClauses.push("p.is_featured = ?");
-      params.push(Number(is_featured));
+    /*
+     * Featured filter
+     *
+     * Supported:
+     * ?is_featured=true
+     * ?is_featured=false
+     * ?is_featured=1
+     * ?is_featured=0
+     */
+    const featuredValue = parseBooleanQuery(is_featured);
+
+    if (featuredValue === null) {
+      return res.status(400).json({
+        success: false,
+        message: "is_featured must be true, false, 1, or 0",
+      });
     }
 
-    if (is_front !== undefined) {
-      whereClauses.push("p.is_front = ?");
-      params.push(Number(is_front));
+    if (featuredValue !== undefined) {
+      whereClauses.push("p.is_featured = ?");
+      params.push(featuredValue);
     }
 
     /*
-     * Customer panel:
-     * Hide products when their category, subcategory, or brand
-     * is deleted/inactive.
+     * Front-page filter
      *
-     * Admin panel:
-     * Do not hide them. Return deletion flags instead.
+     * Supported:
+     * ?is_front=true
+     * ?is_front=false
+     * ?is_front=1
+     * ?is_front=0
+     */
+    const frontValue = parseBooleanQuery(is_front);
+
+    if (frontValue === null) {
+      return res.status(400).json({
+        success: false,
+        message: "is_front must be true, false, 1, or 0",
+      });
+    }
+
+    if (frontValue !== undefined) {
+      whereClauses.push("p.is_front = ?");
+      params.push(frontValue);
+    }
+
+    /*
+     * Customer restrictions:
+     * Hide unavailable products and products whose related
+     * category, subcategory, or brand is deleted/inactive.
+     *
+     * Admin and Staff can see these products with warning fields.
      */
     if (!isAdmin) {
       whereClauses.push("p.is_available = 1");
 
+      whereClauses.push("c.id IS NOT NULL");
       whereClauses.push("c.is_deleted = 0");
-
       whereClauses.push("c.status = 'active'");
 
+      whereClauses.push("sc.id IS NOT NULL");
       whereClauses.push("sc.is_deleted = 0");
       whereClauses.push("sc.status = 'active'");
 
-      whereClauses.push("(br.is_deleted = 0 OR br.id IS NULL)");
-      whereClauses.push("(br.status = 'active' OR br.id IS NULL)");
+      whereClauses.push(
+        "(br.id IS NULL OR (br.is_deleted = 0 AND br.status = 'active'))",
+      );
     }
 
-    const whereSQL = whereClauses.length
-      ? `WHERE ${whereClauses.join(" AND ")}`
-      : "";
+    const whereSQL =
+      whereClauses.length > 0 ? `WHERE ${whereClauses.join(" AND ")}` : "";
 
+    /*
+     * Sorting
+     */
     const sortOptions = {
       latest: "p.product_created_at DESC",
       oldest: "p.product_created_at ASC",
@@ -146,11 +431,22 @@ export const getAllProducts = async (req, res) => {
       name_za: "p.name DESC",
       stock_low_high: "p.available_stock ASC",
       stock_high_low: "p.available_stock DESC",
-      featured: "p.is_featured DESC, p.product_created_at DESC",
+      featured: `
+        p.is_featured DESC,
+        p.product_created_at DESC
+      `,
+      front: `
+        p.is_front DESC,
+        p.product_created_at DESC
+      `,
     };
 
     const orderBy = sortOptions[sort_by] || sortOptions.latest;
 
+    /*
+     * Make sure your actual table is named `subcategory`.
+     * Change it to `subcategories` here if that is the real table name.
+     */
     const baseJoinSQL = `
       FROM product p
 
@@ -164,7 +460,9 @@ export const getAllProducts = async (req, res) => {
         ON p.brand_id = br.id
     `;
 
-    // Count must use the same JOINs and conditions as the product query
+    /*
+     * Count query
+     */
     const [countResult] = await pool.query(
       `
         SELECT COUNT(DISTINCT p.id) AS total
@@ -174,8 +472,11 @@ export const getAllProducts = async (req, res) => {
       params,
     );
 
-    const total = countResult[0].total;
+    const total = Number(countResult[0]?.total || 0);
 
+    /*
+     * Products query
+     */
     const [products] = await pool.query(
       `
         SELECT
@@ -191,6 +492,7 @@ export const getAllProducts = async (req, res) => {
 
           br.name AS brand_name,
           br.status AS brand_status,
+
           CASE
             WHEN br.id IS NULL THEN 0
             ELSE COALESCE(br.is_deleted, 1)
@@ -199,20 +501,28 @@ export const getAllProducts = async (req, res) => {
           CASE
             WHEN c.id IS NULL THEN
               'Category no longer exists'
+
             WHEN c.is_deleted = 1 THEN
               'Product is not deleted, but its category is deleted'
+
             WHEN c.status = 'inactive' THEN
               'Product is not deleted, but its category is inactive'
+
             WHEN sc.id IS NULL THEN
               'Subcategory no longer exists'
+
             WHEN sc.is_deleted = 1 THEN
               'Product is not deleted, but its subcategory is deleted'
+
             WHEN sc.status = 'inactive' THEN
               'Product is not deleted, but its subcategory is inactive'
+
             WHEN br.id IS NOT NULL AND br.is_deleted = 1 THEN
               'Product is not deleted, but its brand is deleted'
+
             WHEN br.id IS NOT NULL AND br.status = 'inactive' THEN
               'Product is not deleted, but its brand is inactive'
+
             ELSE NULL
           END AS relation_warning
 
@@ -226,9 +536,23 @@ export const getAllProducts = async (req, res) => {
       [...params, currentLimit, offset],
     );
 
+    /*
+     * Load media for every product
+     */
     await Promise.all(
       products.map(async (product) => {
         product.media = await getProductMedia(product.id);
+
+        // Return actual Boolean values in the JSON response.
+        product.is_available = Boolean(product.is_available);
+        product.is_featured = Boolean(product.is_featured);
+        product.is_front = Boolean(product.is_front);
+
+        product.category_is_deleted = Boolean(product.category_is_deleted);
+        product.subcategory_is_deleted = Boolean(
+          product.subcategory_is_deleted,
+        );
+        product.brand_is_deleted = Boolean(product.brand_is_deleted);
       }),
     );
 
@@ -240,6 +564,8 @@ export const getAllProducts = async (req, res) => {
         page: currentPage,
         limit: currentLimit,
         totalPages: Math.ceil(total / currentLimit),
+        hasNextPage: currentPage * currentLimit < total,
+        hasPreviousPage: currentPage > 1,
       },
     });
   } catch (error) {
@@ -248,6 +574,7 @@ export const getAllProducts = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Internal server error",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
