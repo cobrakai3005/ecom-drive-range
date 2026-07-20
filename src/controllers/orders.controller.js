@@ -1,6 +1,9 @@
 import { pool } from "../config/db.js";
 import { logAudit } from "../lib/auditLog.js";
-import { sendOrderConfirmationEmail } from "../services/nodemailer.service.js";
+import {
+  sendOrderConfirmationEmail,
+  sendOrderStatusEmail,
+} from "../services/nodemailer.service.js";
 import razorpayInstance from "../config/razorpay.js";
 
 // Helper to safely parse JSON (reuse from cart controller or define here)
@@ -198,6 +201,7 @@ export const initiateRazorpayCheckout = async (req, res) => {
   }
 
   const connection = await pool.getConnection();
+  await connection.query("SET time_zone = '+05:30'");
 
   try {
     await connection.beginTransaction();
@@ -251,6 +255,67 @@ export const initiateRazorpayCheckout = async (req, res) => {
         userId,
       ));
     }
+
+    // Shipping Cost Calulation upcomming
+    /*
+    // Get The shipping Address for Shipping Cost
+    const [[shippingAddress]] = await connection.query(
+      `SELECT
+          id,
+          user_id,
+          state
+        FROM user_addresses
+        WHERE id = ?
+          AND user_id = ?
+          AND is_deleted = 0
+        LIMIT 1`,
+      [shipping_address_id, userId],
+    );
+
+    if (!shippingAddress) {
+      await connection.rollback();
+
+      return res.status(404).json({
+        success: false,
+        message: "Shipping address not found",
+      });
+    }
+    // Get Shipping Rate From State From above address
+    const [[shippingRate]] = await connection.query(
+      `SELECT
+            id,
+            state,
+            shipping_cost,
+            estimated_delivery_days
+          FROM shipping_costs
+          WHERE LOWER(REPLACE(TRIM(state), ' ', '')) =
+                LOWER(REPLACE(TRIM(?), ' ', ''))
+            AND status = 'active'
+          LIMIT 1`,
+      [shippingAddress.state],
+    );
+
+    if (!shippingRate) {
+      await connection.rollback();
+
+      return res.status(400).json({
+        success: false,
+        message: `Shipping is not available for ${shippingAddress.state}`,
+      });
+    }
+    if (!shippingAddress) {
+      await connection.rollback();
+
+      return res.status(404).json({
+        success: false,
+        message: "Shipping address not found",
+      });
+    }
+    // const shipping_cost = parseFloat(req.body.shipping_cost) || 0;
+    const shipping_cost = Number(shippingRate.shipping_cost || 0);
+
+
+    */
 
     const shipping_cost = parseFloat(req.body.shipping_cost) || 0;
 
@@ -309,6 +374,8 @@ export const initiateRazorpayCheckout = async (req, res) => {
         razorpayOrderId: razorpayOrder.id,
         amount: razorpayOrder.amount,
         currency: razorpayOrder.currency,
+        calculated_discount: String(discount_amount),
+        shipping_cost: String(shipping_cost),
         key: process.env.RAZORPAY_KEY_ID,
       },
     });
@@ -378,6 +445,8 @@ export const verifyRazorpayAndCreateOrder = async (req, res) => {
   }
 
   const connection = await pool.getConnection();
+  await connection.query("SET time_zone = '+05:30'");
+
   try {
     await connection.beginTransaction();
 
@@ -670,9 +739,10 @@ export const verifyRazorpayAndCreateOrder = async (req, res) => {
 export const getOrderDetails = async (req, res) => {
   const { id } = req.params;
   const userId = req.user.id;
-
+  const connection = await pool.getConnection();
+  await connection.query("SET SESSION time_zone = '+05:30'");
   try {
-    const [orderRows] = await pool.query(
+    const [orderRows] = await connection.query(
       `SELECT * FROM orders WHERE id = ? AND user_id = ?`,
       [id, userId],
     );
@@ -684,7 +754,7 @@ export const getOrderDetails = async (req, res) => {
       });
     }
 
-    const [items] = await pool.query(
+    const [items] = await connection.query(
       `
   SELECT
     oi.id,
@@ -725,7 +795,7 @@ export const getOrderDetails = async (req, res) => {
       [id],
     );
 
-    const [shipmentRows] = await pool.query(
+    const [shipmentRows] = await connection.query(
       `SELECT 
         id,
         carrier,
@@ -762,374 +832,1034 @@ export const getOrderDetails = async (req, res) => {
       success: false,
       message: "Server error",
     });
+  } finally {
+    await connection.release();
   }
 };
-
 export const getUserOrders = async (req, res) => {
-  const userId = req.user.id;
   try {
-    const [orders] = await pool.query(
-      `SELECT id, order_status, order_date, total_amount, payment_status
-             FROM orders
-             WHERE user_id = ?
-             ORDER BY order_date DESC`,
+    const userId = req.user.id;
+
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+
+    const limit = Math.min(
+      100,
+      Math.max(1, parseInt(req.query.limit, 10) || 10),
+    );
+
+    const offset = (page - 1) * limit;
+
+    // Total orders count for this user
+    const [countResult] = await pool.query(
+      `SELECT COUNT(*) AS total
+       FROM orders
+       WHERE user_id = ?`,
       [userId],
     );
 
-    res.json({ success: true, data: orders });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, message: "Server error" });
-  }
-};
-// ========== ADMIN: update order status ==========
-export const updateOrderStatus = async (req, res) => {
-  const { id } = req.params;
-  const { order_status, admin_notes } = req.body;
-  const allowedStatuses = [
-    "pending",
-    "confirmed",
-    "processing",
-    "shipped",
-    "delivered",
-    "cancelled",
-    "refunded",
-  ];
-  if (!allowedStatuses.includes(order_status)) {
-    return res
-      .status(400)
-      .json({ success: false, message: "Invalid order status" });
-  }
-  try {
-    const [existing] = await pool.query(
-      "SELECT id, order_status FROM orders WHERE id = ?",
-      [id],
-    );
-    if (existing.length === 0) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Order not found" });
-    }
+    const total = Number(countResult[0].total);
 
-    const orderId = existing[0].id;
-
-    // For Auditing
-    // Before update: fetch current order data
-    const [oldOrder] = await pool.query("SELECT * FROM orders WHERE id = ?", [
-      orderId,
-    ]);
-
-    const oldStatus = existing[0].order_status;
-    let updateQuery = `
-  UPDATE orders
-  SET order_status = ?, admin_notes = ?
-`;
-    const params = [order_status, admin_notes || null];
-
-    if (order_status === "delivered" && oldStatus !== "delivered") {
-      updateQuery += `, delivered_at = NOW()`;
-    }
-
-    updateQuery += ` WHERE id = ?`;
-    params.push(id);
-
-    await pool.query(updateQuery, params);
-
-    const [newOrder] = await pool.query("SELECT * FROM orders WHERE id = ?", [
-      orderId,
-    ]);
-
-    // Log audit
-    await logAudit({
-      userId: req.user.id,
-      action: "UPDATE",
-      tableName: "orders",
-      recordId: orderId,
-      oldData: oldOrder[0],
-      newData: newOrder[0],
-      req,
-    });
-
-    // If cancelling, restore stock
-    if (order_status === "cancelled" && oldStatus !== "cancelled") {
-      // Restore available_stock for each order item
-      const [items] = await pool.query(
-        "SELECT product_id, quantity FROM order_items WHERE order_id = ?",
-        [id],
-      );
-      for (const item of items) {
-        await pool.query(
-          "UPDATE product_items SET available_stock = available_stock + ? WHERE id = ?",
-          [item.quantity, item.product_id],
-        );
-        // Also reduce reserved_quantity in product_stock
-        await pool.query(
-          `UPDATE product_stock SET reserved_quantity = GREATEST(reserved_quantity - ?, 0)
-                     WHERE product_id = ?`,
-          [item.quantity, item.product_id],
-        );
-      }
-    }
-    res.json({ success: true, message: "Order status updated" });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, message: "Server error" });
-  }
-};
-
-export const getAllOrders = async (req, res) => {
-  const page = parseInt(req.query.page) || 1;
-  const limit = parseInt(req.query.limit) || 10;
-  const offset = (page - 1) * limit;
-
-  const { status, from_date, to_date } = req.query;
-
-  const conditions = [];
-  const params = [];
-
-  if (
-    status &&
-    [
-      "pending",
-      "confirmed",
-      "processing",
-      "shipped",
-      "delivered",
-      "cancelled",
-      "refunded",
-    ].includes(status)
-  ) {
-    conditions.push("o.order_status = ?");
-    params.push(status);
-  }
-
-  if (from_date) {
-    conditions.push("DATE(o.order_date) >= ?");
-    params.push(from_date);
-  }
-
-  if (to_date) {
-    conditions.push("DATE(o.order_date) <= ?");
-    params.push(to_date);
-  }
-
-  const whereClause =
-    conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-
-  try {
-    // Get total count
-    const [countResult] = await pool.query(
-      `SELECT COUNT(*) AS total
-       FROM orders o
-       ${whereClause}`,
-      params,
-    );
-
-    const total = countResult[0].total;
-
-    // Get orders
+    // Paginated user orders
     const [orders] = await pool.query(
       `SELECT
-        o.*,
-        u.full_name as customer_name,
-        u.email as customer_email,
-        u.phone as customer_phone,
-        u.profile_image as customer_profile_image,
-        u.role as customer_role,
-
-        -- Shipping Address
-        sa.full_name as shipping_full_name,
-        sa.phone as shipping_phone,
-        sa.line1 as shipping_line1,
-        sa.line2 as shipping_line2,
-        sa.landmark as shipping_landmark,
-        sa.city as shipping_city,
-        sa.state as shipping_state,
-        sa.postal_code as shipping_postal_code,
-        sa.country as shipping_country,
-        CONCAT_WS(', ',
-          sa.line1,
-          sa.line2,
-          sa.landmark,
-          sa.city,
-          sa.state,
-          sa.postal_code,
-          sa.country
-        ) as shipping_full_address,
-
-        -- Billing Address
-        ba.full_name as billing_full_name,
-        ba.phone as billing_phone,
-        ba.line1 as billing_line1,
-        ba.line2 as billing_line2,
-        ba.landmark as billing_landmark,
-        ba.city as billing_city,
-        ba.state as billing_state,
-        ba.postal_code as billing_postal_code,
-        ba.country as billing_country,
-        CONCAT_WS(', ',
-          ba.line1,
-          ba.line2,
-          ba.landmark,
-          ba.city,
-          ba.state,
-          ba.postal_code,
-          ba.country
-        ) as billing_full_address
-
-      FROM orders o
-      LEFT JOIN users u ON o.user_id = u.id
-      LEFT JOIN user_addresses sa ON o.shipping_address_id = sa.id
-      LEFT JOIN user_addresses ba ON o.billing_address_id = ba.id
-
-      ${whereClause}
-
-      ORDER BY o.order_date DESC
-      LIMIT ? OFFSET ?`,
-      [...params, limit, offset],
+        id,
+        order_status,
+        order_date,
+        total_amount,
+        payment_status
+       FROM orders
+       WHERE user_id = ?
+       ORDER BY order_date DESC, id DESC
+       LIMIT ? OFFSET ?`,
+      [userId, limit, offset],
     );
-    // Get order items for all orders
-    const orderIds = orders.map((order) => order.id);
-    let orderItemsMap = {};
 
-    if (orderIds.length > 0) {
-      // Get all order items with product details (now directly from product table)
-      const [items] = await pool.query(
-        `SELECT 
-          oi.id,
-          oi.order_id,
-          oi.product_id,
-          oi.quantity,
-          oi.unit_price,
-          oi.total_price,
-          oi.product_data_snapshot as product_snapshot,
-          p.name as product_name,
-          p.slug as product_slug,
-          p.status as product_status,
-          p.sku as product_sku,
-          p.price as current_price,
-          p.weight,
-          p.width,
-          p.height,
-          p.depth,
-          p.is_available,
-          p.available_stock
-        FROM order_items oi
-        LEFT JOIN product p ON oi.product_id = p.id
-        WHERE oi.order_id IN (?)
-        ORDER BY oi.order_id, oi.id`,
-        [orderIds],
-      );
-
-      // Group items by order_id
-      orderItemsMap = items.reduce((acc, item) => {
-        if (!acc[item.order_id]) {
-          acc[item.order_id] = [];
-        }
-        // Parse the JSON snapshot or use the individual fields
-        let productSnapshot = item.product_snapshot;
-        if (typeof productSnapshot === "string") {
-          try {
-            productSnapshot = JSON.parse(productSnapshot);
-          } catch (e) {
-            productSnapshot = {};
-          }
-        }
-
-        acc[item.order_id].push({
-          id: item.id,
-          product_id: item.product_id, // renamed from product_item_id
-          quantity: item.quantity,
-          unit_price: item.unit_price,
-          total_price: item.total_price,
-          product: {
-            id: item.product_id, // product id directly
-            name: item.product_name || productSnapshot?.product_name,
-            slug: item.product_slug,
-            sku: item.product_sku || productSnapshot?.sku,
-            // variation may be stored in snapshot, if needed:
-            variation: productSnapshot?.variation || null,
-            status: item.product_status,
-            current_price: item.current_price,
-            weight: item.weight,
-            dimensions: {
-              width: item.width,
-              height: item.height,
-              depth: item.depth,
-            },
-            is_available: item.is_available,
-            available_stock: item.available_stock,
-            snapshot: productSnapshot, // Keep the full snapshot for reference
-          },
-        });
-        return acc;
-      }, {});
-    }
-
-    // Combine orders with their items and calculate summary
-    const ordersWithDetails = orders.map((order) => ({
-      ...order,
-      items: orderItemsMap[order.id] || [],
-      item_count: orderItemsMap[order.id]?.length || 0,
-      summary: {
-        subtotal: order.subtotal,
-        shipping_cost: order.shipping_cost,
-        tax_amount: order.tax_amount,
-        discount_amount: order.discount_amount,
-        total_amount: order.total_amount,
-        currency: order.currency_code,
-      },
-      customer: {
-        id: order.user_id,
-        name: order.customer_name,
-        email: order.customer_email,
-        phone: order.customer_phone,
-        profile_image: order.customer_profile_image,
-        role: order.customer_role,
-      },
-      shipping_address: {
-        id: order.shipping_address_id,
-        full_name: order.shipping_full_name,
-        phone: order.shipping_phone,
-        line1: order.shipping_line1,
-        line2: order.shipping_line2,
-        landmark: order.shipping_landmark,
-        city: order.shipping_city,
-        state: order.shipping_state,
-        postal_code: order.shipping_postal_code,
-        country: order.shipping_country,
-        full_address: order.shipping_full_address,
-      },
-      billing_address: {
-        id: order.billing_address_id,
-        full_name: order.billing_full_name,
-        phone: order.billing_phone,
-        line1: order.billing_line1,
-        line2: order.billing_line2,
-        landmark: order.billing_landmark,
-        city: order.billing_city,
-        state: order.billing_state,
-        postal_code: order.billing_postal_code,
-        country: order.billing_country,
-        full_address: order.billing_full_address,
-      },
-    }));
-
-    res.json({
+    return res.status(200).json({
       success: true,
-      data: ordersWithDetails,
+      data: orders,
       pagination: {
         page,
         limit,
         total,
         totalPages: Math.ceil(total / limit),
+        hasNextPage: page < Math.ceil(total / limit),
+        hasPreviousPage: page > 1,
       },
     });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, message: "Server error" });
+    console.error("Get user orders error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
   }
 };
+// ========== ADMIN: update order status ==========
+// export const updateOrderStatus = async (req, res) => {
+//   const { id } = req.params;
+//   const { order_status, admin_notes } = req.body;
+//   const allowedStatuses = [
+//     "pending",
+//     "confirmed",
+//     "processing",
+//     "shipped",
+//     "delivered",
+//     "cancelled",
+//     "returned",
+//   ];
+//   if (!allowedStatuses.includes(order_status)) {
+//     return res
+//       .status(400)
+//       .json({ success: false, message: "Invalid order status" });
+//   }
+//   try {
+//     const [existing] = await pool.query(
+//       "SELECT id, order_status FROM orders WHERE id = ?",
+//       [id],
+//     );
+//     if (existing.length === 0) {
+//       return res
+//         .status(404)
+//         .json({ success: false, message: "Order not found" });
+//     }
+
+//     const orderId = existing[0].id;
+
+//     // For Auditing
+//     // Before update: fetch current order data
+//     const [oldOrder] = await pool.query("SELECT * FROM orders WHERE id = ?", [
+//       orderId,
+//     ]);
+
+//     const oldStatus = existing[0].order_status;
+//     let updateQuery = `
+//   UPDATE orders
+//   SET order_status = ?, admin_notes = ?
+// `;
+//     const params = [order_status, admin_notes || null];
+
+//     if (order_status === "delivered" && oldStatus !== "delivered") {
+//       updateQuery += `, delivered_at = NOW()`;
+//     }
+
+//     updateQuery += ` WHERE id = ?`;
+//     params.push(id);
+
+//     await pool.query(updateQuery, params);
+
+//     const [newOrder] = await pool.query("SELECT * FROM orders WHERE id = ?", [
+//       orderId,
+//     ]);
+
+//     // Log audit
+//     await logAudit({
+//       userId: req.user.id,
+//       action: "UPDATE",
+//       tableName: "orders",
+//       recordId: orderId,
+//       oldData: oldOrder[0],
+//       newData: newOrder[0],
+//       req,
+//     });
+
+//     // If cancelling, restore stock
+//     if (order_status === "cancelled" && oldStatus !== "cancelled") {
+//       // Restore available_stock for each order item
+//       const [items] = await pool.query(
+//         "SELECT product_id, quantity FROM order_items WHERE order_id = ?",
+//         [id],
+//       );
+//       for (const item of items) {
+//         await pool.query(
+//           "UPDATE product_items SET available_stock = available_stock + ? WHERE id = ?",
+//           [item.quantity, item.product_id],
+//         );
+//         // Also reduce reserved_quantity in product_stock
+//         await pool.query(
+//           `UPDATE product_stock SET reserved_quantity = GREATEST(reserved_quantity - ?, 0)
+//                      WHERE product_id = ?`,
+//           [item.quantity, item.product_id],
+//         );
+//       }
+//     }
+//     res.json({ success: true, message: "Order status updated" });
+//   } catch (error) {
+//     console.error(error);
+//     res.status(500).json({ success: false, message: "Server error" });
+//   }
+// };
+const orderTrackingEventMap = {
+  pending: "Order pending",
+  processing: "Order processing",
+  shipped: "Order shipped",
+  delivered: "Order delivered",
+  cancelled: "Order cancelled",
+  returned: "Order returned",
+  refunded: "Order refunded",
+};
+
+/*
+ * Shipment's current_status may be different from order_status.
+ * Only update it when an equivalent shipment status exists.
+ */
+const orderToShipmentStatusMap = {
+  pending: "pending",
+  processing: "assigned",
+  shipped: "in_transit",
+  delivered: "delivered",
+  cancelled: "cancelled",
+  returned: "returned",
+};
+// export const updateOrderStatus = async (req, res) => {
+//   const orderId = Number(req.params.id);
+//   const { order_status, admin_notes } = req.body;
+
+//   const allowedStatuses = [
+//     "pending",
+//     // "confirmed",
+//     "processing",
+//     "shipped",
+//     "delivered",
+//     "cancelled",
+//     "returned",
+//     "refunded",
+//   ];
+
+//   if (!Number.isInteger(orderId) || orderId <= 0) {
+//     return res.status(400).json({
+//       success: false,
+//       message: "Invalid order ID",
+//     });
+//   }
+
+//   if (!allowedStatuses.includes(order_status)) {
+//     return res.status(400).json({
+//       success: false,
+//       message: "Invalid order status",
+//     });
+//   }
+
+//   const connection = await pool.getConnection();
+
+//   try {
+//     await connection.query("SET time_zone = '+05:30'");
+//     await connection.beginTransaction();
+
+//     // Lock order while updating its status
+//     const [existingOrders] = await connection.query(
+//       `SELECT
+//         o.*,
+//         u.full_name AS customer_name,
+//         u.email AS customer_email,
+
+//         CONCAT_WS(
+//           ', ',
+//           sa.full_name,
+//           sa.line1,
+//           sa.line2,
+//           sa.landmark,
+//           CONCAT(sa.city, ', ', sa.state, ' - ', sa.postal_code),
+//           sa.country,
+//           CONCAT('Phone: ', sa.phone)
+//         ) AS shipping_full_address
+
+//        FROM orders o
+
+//        LEFT JOIN users u
+//          ON u.id = o.user_id
+
+//        LEFT JOIN user_addresses sa
+//          ON sa.id = o.shipping_address_id
+
+//        WHERE o.id = ?
+
+//        FOR UPDATE`,
+//       [orderId],
+//     );
+
+//     if (existingOrders.length === 0) {
+//       await connection.rollback();
+
+//       return res.status(404).json({
+//         success: false,
+//         message: "Order not found",
+//       });
+//     }
+
+//     const oldOrder = existingOrders[0];
+//     const oldStatus = oldOrder.order_status;
+
+//     // Avoid unnecessary update and duplicate email
+//     if (oldStatus === order_status) {
+//       await connection.rollback();
+
+//       return res.status(200).json({
+//         success: true,
+//         message: `Order is already ${order_status}`,
+//         email_sent: false,
+//       });
+//     }
+
+//     /*
+//      * You can optionally add transition validation here.
+//      * For example, prevent delivered -> processing.
+//      */
+
+//     const updateFields = ["order_status = ?", "admin_notes = ?"];
+
+//     const updateParams = [
+//       order_status,
+//       admin_notes !== undefined ? admin_notes : oldOrder.admin_notes,
+//     ];
+
+//     if (order_status === "delivered") {
+//       updateFields.push("delivered_at = COALESCE(delivered_at, NOW())");
+//     }
+
+//     /*
+//      * When cancelling an order that was not delivered,
+//      * delivered_at should remain NULL.
+//      */
+//     if (order_status === "cancelled" && oldStatus !== "delivered") {
+//       updateFields.push("delivered_at = NULL");
+//     }
+
+//     updateParams.push(orderId);
+
+//     await connection.query(
+//       `UPDATE orders
+//        SET ${updateFields.join(", ")}
+//        WHERE id = ?`,
+//       updateParams,
+//     );
+
+//     /*
+//      * Restore stock only when entering cancelled status.
+//      * This prevents stock from being restored multiple times.
+//      */
+//     if (order_status === "cancelled" && oldStatus !== "cancelled") {
+//       const [items] = await connection.query(
+//         `SELECT product_id, quantity
+//          FROM order_items
+//          WHERE order_id = ?`,
+//         [orderId],
+//       );
+
+//       for (const item of items) {
+//         // Your original code used product_items, but your table is product
+//         await connection.query(
+//           `UPDATE product
+//            SET available_stock = available_stock + ?
+//            WHERE id = ?`,
+//           [item.quantity, item.product_id],
+//         );
+
+//         await connection.query(
+//           `UPDATE product_stock
+//            SET reserved_quantity =
+//              GREATEST(reserved_quantity - ?, 0)
+//            WHERE product_id = ?`,
+//           [item.quantity, item.product_id],
+//         );
+//       }
+//     }
+
+//     /*
+//      * Do not automatically restore returned stock here unless
+//      * your return has been inspected and approved.
+//      *
+//      * A returned product might be damaged or not resellable.
+//      */
+
+//     const [updatedOrders] = await connection.query(
+//       `SELECT *
+//        FROM orders
+//        WHERE id = ?`,
+//       [orderId],
+//     );
+
+//     const updatedOrder = updatedOrders[0];
+
+//     // Get latest shipment information for the email
+//     const [shipments] = await connection.query(
+//       `SELECT
+//         carrier,
+//         current_status
+//        FROM shipments
+//        WHERE order_id = ?
+//        ORDER BY created_at DESC
+//        LIMIT 1`,
+//       [orderId],
+//     );
+
+//     const shipment = shipments[0] || {};
+
+//     await connection.commit();
+
+//     // Audit after successful update
+//     try {
+//       await logAudit({
+//         userId: req.user.id,
+//         action: "UPDATE",
+//         tableName: "orders",
+//         recordId: orderId,
+//         oldData: oldOrder,
+//         newData: updatedOrder,
+//         req,
+//       });
+//     } catch (auditError) {
+//       console.error("Order status audit log failed:", auditError.message);
+//     }
+
+//     const emailStatuses = ["shipped", "delivered", "cancelled", "returned"];
+
+//     const shouldSendEmail =
+//       emailStatuses.includes(order_status) &&
+//       oldStatus !== order_status &&
+//       oldOrder.customer_email;
+
+//     // Return API response without waiting for email SMTP
+//     res.status(200).json({
+//       success: true,
+//       message: `Order status changed from ${oldStatus} to ${order_status}`,
+//       email_scheduled: Boolean(shouldSendEmail),
+//       data: {
+//         order_id: orderId,
+//         old_status: oldStatus,
+//         new_status: order_status,
+//       },
+//     });
+
+//     if (shouldSendEmail) {
+//       const emailOrderDetails = {
+//         order_id: orderId,
+//         customer_name: oldOrder.customer_name,
+//         order_status,
+//         // tracking_number: shipment.tracking_number || null,
+//         carrier: shipment.carrier || null,
+//         total_amount: Number(updatedOrder.total_amount),
+//         currency_code: updatedOrder.currency_code || "INR",
+//         shipping_address: oldOrder.shipping_full_address,
+//       };
+//       sendOrderStatusEmail(oldOrder.customer_email, emailOrderDetails)
+//         .then(() => {
+//           console.log(
+//             `Order ${order_status} email sent for order number${orderId}`,
+//           );
+//         })
+//         .catch((emailError) => {
+//           console.error(
+//             `Order ${order_status} email failed for order #${orderId}:`,
+//             emailError.message,
+//           );
+//         });
+//     }
+//   } catch (error) {
+//     try {
+//       await connection.rollback();
+//     } catch (rollbackError) {
+//       console.error("Rollback error:", rollbackError.message);
+//     }
+
+//     console.error("Update order status error:", error);
+
+//     return res.status(500).json({
+//       success: false,
+//       message: "Failed to update order status",
+//       error: error.message,
+//     });
+//   } finally {
+//     connection.release();
+//   }
+// };
+
+export const updateOrderStatus = async (req, res) => {
+  const orderId = Number(req.params.id);
+  const { order_status, admin_notes } = req.body;
+
+  const allowedStatuses = [
+    "pending",
+    "processing",
+    "shipped",
+    "delivered",
+    "cancelled",
+    "returned",
+    "refunded",
+  ];
+
+  const orderTrackingEventMap = {
+    pending: "Order pending",
+    processing: "Order processing",
+    shipped: "Order shipped",
+    delivered: "Order delivered",
+    cancelled: "Order cancelled",
+    returned: "Order returned",
+    refunded: "Order refunded",
+  };
+
+  const orderToShipmentStatusMap = {
+    pending: "pending",
+    processing: "assigned",
+    shipped: "in_transit",
+    delivered: "delivered",
+    cancelled: "cancelled",
+    returned: "returned",
+  };
+
+  if (!Number.isInteger(orderId) || orderId <= 0) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid order ID",
+    });
+  }
+
+  if (!allowedStatuses.includes(order_status)) {
+    return res.status(400).json({
+      success: false,
+      message: `Invalid order status. Allowed statuses are: ${allowedStatuses.join(
+        ", ",
+      )}`,
+    });
+  }
+
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.query("SET time_zone = '+05:30'");
+    await connection.beginTransaction();
+
+    const [existingOrders] = await connection.query(
+      `SELECT
+        o.*,
+        u.full_name AS customer_name,
+        u.email AS customer_email,
+
+        CONCAT_WS(
+          ', ',
+          sa.full_name,
+          sa.line1,
+          sa.line2,
+          sa.landmark,
+          CONCAT(sa.city, ', ', sa.state, ' - ', sa.postal_code),
+          sa.country,
+          CONCAT('Phone: ', sa.phone)
+        ) AS shipping_full_address
+
+       FROM orders o
+
+       LEFT JOIN users u
+         ON u.id = o.user_id
+
+       LEFT JOIN user_addresses sa
+         ON sa.id = o.shipping_address_id
+
+       WHERE o.id = ?
+
+       FOR UPDATE`,
+      [orderId],
+    );
+
+    if (existingOrders.length === 0) {
+      await connection.rollback();
+
+      return res.status(404).json({
+        success: false,
+        message: "Order not found",
+      });
+    }
+
+    const oldOrder = existingOrders[0];
+    const oldStatus = oldOrder.order_status;
+
+    if (oldStatus === order_status) {
+      await connection.rollback();
+
+      return res.status(200).json({
+        success: true,
+        message: `Order is already ${order_status}`,
+        email_sent: false,
+      });
+    }
+
+    const updateFields = ["order_status = ?", "admin_notes = ?"];
+
+    const updateParams = [
+      order_status,
+      admin_notes !== undefined ? admin_notes : oldOrder.admin_notes,
+    ];
+
+    if (order_status === "delivered") {
+      updateFields.push("delivered_at = COALESCE(delivered_at, NOW())");
+    }
+
+    if (order_status === "cancelled" && oldStatus !== "delivered") {
+      updateFields.push("delivered_at = NULL");
+    }
+
+    if (order_status === "returned") {
+      updateFields.push("return_date = COALESCE(return_date, NOW())");
+    }
+
+    updateParams.push(orderId);
+
+    await connection.query(
+      `UPDATE orders
+       SET ${updateFields.join(", ")}
+       WHERE id = ?`,
+      updateParams,
+    );
+
+    /*
+     * Add the order status change to the latest shipment's
+     * tracking history.
+     */
+    const [shipmentRows] = await connection.query(
+      `SELECT
+        id,
+        carrier,
+        current_status,
+        tracking_history
+       FROM shipments
+       WHERE order_id = ?
+       ORDER BY created_at DESC
+       LIMIT 1
+       FOR UPDATE`,
+      [orderId],
+    );
+
+    let shipment = null;
+    let trackingAdded = false;
+
+    if (shipmentRows.length > 0) {
+      shipment = shipmentRows[0];
+
+      let trackingHistory = shipment.tracking_history || [];
+
+      if (typeof trackingHistory === "string") {
+        try {
+          trackingHistory = JSON.parse(trackingHistory);
+        } catch (parseError) {
+          console.error(
+            "Shipment tracking history JSON parse error:",
+            parseError.message,
+          );
+
+          trackingHistory = [];
+        }
+      }
+
+      if (!Array.isArray(trackingHistory)) {
+        trackingHistory = [];
+      }
+
+      const trackingEvent = orderTrackingEventMap[order_status];
+
+      /*
+       * Check using order_status rather than only event text.
+       * This makes duplicate checking more reliable.
+       */
+      const alreadyExists = trackingHistory.some(
+        (item) =>
+          item.order_status === order_status || item.event === trackingEvent,
+      );
+
+      if (!alreadyExists) {
+        trackingHistory.push({
+          event: trackingEvent,
+          order_status,
+          previous_order_status: oldStatus,
+          source: "order_status",
+          date: new Date().toISOString(),
+        });
+
+        trackingAdded = true;
+      }
+
+      const shipmentStatus =
+        orderToShipmentStatusMap[order_status] || shipment.current_status;
+
+      await connection.query(
+        `UPDATE shipments
+         SET
+           current_status = ?,
+           tracking_history = ?
+         WHERE id = ?`,
+        [shipmentStatus, JSON.stringify(trackingHistory), shipment.id],
+      );
+
+      shipment.current_status = shipmentStatus;
+      shipment.tracking_history = trackingHistory;
+    }
+
+    /*
+     * Restore stock only when entering cancelled status.
+     */
+    if (order_status === "cancelled" && oldStatus !== "cancelled") {
+      const [items] = await connection.query(
+        `SELECT product_id, quantity
+         FROM order_items
+         WHERE order_id = ?`,
+        [orderId],
+      );
+
+      for (const item of items) {
+        await connection.query(
+          `UPDATE product
+           SET available_stock = available_stock + ?
+           WHERE id = ?`,
+          [item.quantity, item.product_id],
+        );
+
+        await connection.query(
+          `UPDATE product_stock
+           SET reserved_quantity =
+             GREATEST(reserved_quantity - ?, 0)
+           WHERE product_id = ?`,
+          [item.quantity, item.product_id],
+        );
+      }
+    }
+
+    const [updatedOrders] = await connection.query(
+      `SELECT *
+       FROM orders
+       WHERE id = ?`,
+      [orderId],
+    );
+
+    const updatedOrder = updatedOrders[0];
+
+    await connection.commit();
+
+    try {
+      await logAudit({
+        userId: req.user.id,
+        action: "UPDATE",
+        tableName: "orders",
+        recordId: orderId,
+        oldData: oldOrder,
+        newData: updatedOrder,
+        req,
+      });
+    } catch (auditError) {
+      console.error("Order status audit log failed:", auditError.message);
+    }
+
+    const emailStatuses = ["shipped", "delivered", "cancelled", "returned"];
+
+    const shouldSendEmail =
+      emailStatuses.includes(order_status) && oldOrder.customer_email;
+
+    res.status(200).json({
+      success: true,
+      message: `Order status changed from ${oldStatus} to ${order_status}`,
+      email_scheduled: Boolean(shouldSendEmail),
+      data: {
+        order_id: orderId,
+        old_status: oldStatus,
+        new_status: order_status,
+        shipment_found: Boolean(shipment),
+        shipment_status: shipment?.current_status || null,
+        tracking_event: orderTrackingEventMap[order_status] || null,
+        tracking_added: trackingAdded,
+      },
+    });
+
+    if (shouldSendEmail) {
+      const emailOrderDetails = {
+        order_id: orderId,
+        customer_name: oldOrder.customer_name,
+        order_status,
+        // tracking_number: shipment?.tracking_number || null,
+        carrier: shipment?.carrier || null,
+        total_amount: Number(updatedOrder.total_amount),
+        currency_code: updatedOrder.currency_code || "INR",
+        shipping_address: oldOrder.shipping_full_address,
+      };
+
+      sendOrderStatusEmail(oldOrder.customer_email, emailOrderDetails)
+        .then(() => {
+          console.log(`Order ${order_status} email sent for order #${orderId}`);
+        })
+        .catch((emailError) => {
+          console.error(
+            `Order ${order_status} email failed for order #${orderId}:`,
+            emailError.message,
+          );
+        });
+    }
+  } catch (error) {
+    try {
+      await connection.rollback();
+    } catch (rollbackError) {
+      console.error("Rollback error:", rollbackError.message);
+    }
+
+    console.error("Update order status error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update order status",
+      error: error.message,
+    });
+  } finally {
+    connection.release();
+  }
+};
+// export const getAllOrders = async (req, res) => {
+//   const page = parseInt(req.query.page) || 1;
+//   const limit = parseInt(req.query.limit) || 10;
+//   const offset = (page - 1) * limit;
+
+//   const { status, from_date, to_date } = req.query;
+
+//   const conditions = [];
+//   const params = [];
+
+//   if (
+//     status &&
+//     [
+//       "pending",
+//       "confirmed",
+//       "processing",
+//       "shipped",
+//       "delivered",
+//       "cancelled",
+//       "returned",
+//     ].includes(status)
+//   ) {
+//     conditions.push("o.order_status = ?");
+//     params.push(status);
+//   }
+
+//   if (from_date) {
+//     conditions.push("DATE(o.order_date) >= ?");
+//     params.push(from_date);
+//   }
+
+//   if (to_date) {
+//     conditions.push("DATE(o.order_date) <= ?");
+//     params.push(to_date);
+//   }
+
+//   const whereClause =
+//     conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+
+//   try {
+//     // Get total count
+//     const [countResult] = await pool.query(
+//       `SELECT COUNT(*) AS total
+//        FROM orders o
+//        ${whereClause}`,
+//       params,
+//     );
+
+//     const total = countResult[0].total;
+
+//     // Get orders
+//     const [orders] = await pool.query(
+//       `SELECT
+//         o.*,
+//         u.full_name as customer_name,
+//         u.email as customer_email,
+//         u.phone as customer_phone,
+//         u.profile_image as customer_profile_image,
+//         u.role as customer_role,
+
+//         -- Shipping Address
+//         sa.full_name as shipping_full_name,
+//         sa.phone as shipping_phone,
+//         sa.line1 as shipping_line1,
+//         sa.line2 as shipping_line2,
+//         sa.landmark as shipping_landmark,
+//         sa.city as shipping_city,
+//         sa.state as shipping_state,
+//         sa.postal_code as shipping_postal_code,
+//         sa.country as shipping_country,
+//         CONCAT_WS(', ',
+//           sa.line1,
+//           sa.line2,
+//           sa.landmark,
+//           sa.city,
+//           sa.state,
+//           sa.postal_code,
+//           sa.country
+//         ) as shipping_full_address,
+
+//         -- Billing Address
+//         ba.full_name as billing_full_name,
+//         ba.phone as billing_phone,
+//         ba.line1 as billing_line1,
+//         ba.line2 as billing_line2,
+//         ba.landmark as billing_landmark,
+//         ba.city as billing_city,
+//         ba.state as billing_state,
+//         ba.postal_code as billing_postal_code,
+//         ba.country as billing_country,
+//         CONCAT_WS(', ',
+//           ba.line1,
+//           ba.line2,
+//           ba.landmark,
+//           ba.city,
+//           ba.state,
+//           ba.postal_code,
+//           ba.country
+//         ) as billing_full_address
+
+//       FROM orders o
+//       LEFT JOIN users u ON o.user_id = u.id
+//       LEFT JOIN user_addresses sa ON o.shipping_address_id = sa.id
+//       LEFT JOIN user_addresses ba ON o.billing_address_id = ba.id
+
+//       ${whereClause}
+
+//       ORDER BY o.order_date DESC
+//       LIMIT ? OFFSET ?`,
+//       [...params, limit, offset],
+//     );
+//     // Get order items for all orders
+//     const orderIds = orders.map((order) => order.id);
+//     let orderItemsMap = {};
+
+//     if (orderIds.length > 0) {
+//       // Get all order items with product details (now directly from product table)
+//       const [items] = await pool.query(
+//         `SELECT
+//           oi.id,
+//           oi.order_id,
+//           oi.product_id,
+//           oi.quantity,
+//           oi.unit_price,
+//           oi.total_price,
+//           oi.product_data_snapshot as product_snapshot,
+//           p.name as product_name,
+//           p.slug as product_slug,
+//           p.status as product_status,
+//           p.sku as product_sku,
+//           p.price as current_price,
+//           p.weight,
+//           p.width,
+//           p.height,
+//           p.depth,
+//           p.is_available,
+//           p.available_stock
+//         FROM order_items oi
+//         LEFT JOIN product p ON oi.product_id = p.id
+//         WHERE oi.order_id IN (?)
+//         ORDER BY oi.order_id, oi.id`,
+//         [orderIds],
+//       );
+
+//       // Group items by order_id
+//       orderItemsMap = items.reduce((acc, item) => {
+//         if (!acc[item.order_id]) {
+//           acc[item.order_id] = [];
+//         }
+//         // Parse the JSON snapshot or use the individual fields
+//         let productSnapshot = item.product_snapshot;
+//         if (typeof productSnapshot === "string") {
+//           try {
+//             productSnapshot = JSON.parse(productSnapshot);
+//           } catch (e) {
+//             productSnapshot = {};
+//           }
+//         }
+
+//         acc[item.order_id].push({
+//           id: item.id,
+//           product_id: item.product_id, // renamed from product_item_id
+//           quantity: item.quantity,
+//           unit_price: item.unit_price,
+//           total_price: item.total_price,
+//           product: {
+//             id: item.product_id, // product id directly
+//             name: item.product_name || productSnapshot?.product_name,
+//             slug: item.prodreuct_slug,
+//             sku: item.product_sku || productSnapshot?.sku,
+//             // variation may be stored in snapshot, if needed:
+//             variation: productSnapshot?.variation || null,
+//             status: item.product_status,
+//             current_price: item.current_price,
+//             weight: item.weight,
+//             dimensions: {
+//               width: item.width,
+//               height: item.height,
+//               depth: item.depth,
+//             },
+//             is_available: item.is_available,
+//             available_stock: item.available_stock,
+//             snapshot: productSnapshot, // Keep the full snapshot for reference
+//           },
+//         });
+//         return acc;
+//       }, {});
+//     }
+
+//     // Combine orders with their items and calculate summary
+//     const ordersWithDetails = orders.map((order) => ({
+//       ...order,
+//       items: orderItemsMap[order.id] || [],
+//       item_count: orderItemsMap[order.id]?.length || 0,
+//       summary: {
+//         subtotal: order.subtotal,
+//         shipping_cost: order.shipping_cost,
+//         tax_amount: order.tax_amount,
+//         discount_amount: order.discount_amount,
+//         total_amount: order.total_amount,
+//         currency: order.currency_code,
+//       },
+//       customer: {
+//         id: order.user_id,
+//         name: order.customer_name,
+//         email: order.customer_email,
+//         phone: order.customer_phone,
+//         profile_image: order.customer_profile_image,
+//         role: order.customer_role,
+//       },
+//       shipping_address: {
+//         id: order.shipping_address_id,
+//         full_name: order.shipping_full_name,
+//         phone: order.shipping_phone,
+//         line1: order.shipping_line1,
+//         line2: order.shipping_line2,
+//         landmark: order.shipping_landmark,
+//         city: order.shipping_city,
+//         state: order.shipping_state,
+//         postal_code: order.shipping_postal_code,
+//         country: order.shipping_country,
+//         full_address: order.shipping_full_address,
+//       },
+//       billing_address: {
+//         id: order.billing_address_id,
+//         full_name: order.billing_full_name,
+//         phone: order.billing_phone,
+//         line1: order.billing_line1,
+//         line2: order.billing_line2,
+//         landmark: order.billing_landmark,
+//         city: order.billing_city,
+//         state: order.billing_state,
+//         postal_code: order.billing_postal_code,
+//         country: order.billing_country,
+//         full_address: order.billing_full_address,
+//       },
+//     }));
+
+//     res.json({
+//       success: true,
+//       data: ordersWithDetails,
+//       pagination: {
+//         page,
+//         limit,
+//         total,
+//         totalPages: Math.ceil(total / limit),
+//       },
+//     });
+//   } catch (error) {
+//     console.error(error);
+//     res.status(500).json({ success: false, message: "Server error" });
+//   }
+// };
 // export const getAllOrders = async (req, res) => {
 //   const page = parseInt(req.query.page) || 1;
 //   const limit = parseInt(req.query.limit) || 10;
@@ -1363,6 +2093,312 @@ export const getAllOrders = async (req, res) => {
 //   }
 // };
 
+export const getAllOrders = async (req, res) => {
+  try {
+
+    const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+
+    const limit = Math.min(
+      100,
+      Math.max(1, Number.parseInt(req.query.limit, 10) || 10),
+    );
+
+    const offset = (page - 1) * limit;
+
+    const { status, from_date, to_date } = req.query;
+
+    const allowedStatuses = [
+      "pending",
+      "confirmed",
+      "processing",
+      "shipped",
+      "delivered",
+      "cancelled",
+      "returned",
+    ];
+
+    const conditions = [];
+    const params = [];
+
+    if (status && allowedStatuses.includes(status)) {
+      conditions.push("o.order_status = ?");
+      params.push(status);
+    }
+
+    if (from_date) {
+      conditions.push("DATE(o.order_date) >= ?");
+      params.push(from_date);
+    }
+
+    if (to_date) {
+      conditions.push("DATE(o.order_date) <= ?");
+      params.push(to_date);
+    }
+
+    const whereClause = conditions.length
+      ? `WHERE ${conditions.join(" AND ")}`
+      : "";
+
+    
+    // Total matching orders
+    const [countResult] = await pool.query(
+      `
+      SELECT COUNT(*) AS total
+      FROM orders o
+      ${whereClause}
+      `,
+      params,
+    );
+
+    const total = Number(countResult[0].total);
+
+    // Only paginated orders
+    const [orders] = await pool.query(
+      `
+  SELECT
+    o.*,
+
+    u.full_name AS customer_name,
+    u.email AS customer_email,
+    u.phone AS customer_phone,
+    u.profile_image AS customer_profile_image,
+    u.role AS customer_role,
+
+    sa.full_name AS shipping_full_name,
+    sa.phone AS shipping_phone,
+    sa.line1 AS shipping_line1,
+    sa.line2 AS shipping_line2,
+    sa.landmark AS shipping_landmark,
+    sa.city AS shipping_city,
+    sa.state AS shipping_state,
+    sa.postal_code AS shipping_postal_code,
+    sa.country AS shipping_country,
+
+    CONCAT_WS(
+      ', ',
+      sa.line1,
+      sa.line2,
+      sa.landmark,
+      sa.city,
+      sa.state,
+      sa.postal_code,
+      sa.country
+    ) AS shipping_full_address,
+
+    ba.full_name AS billing_full_name,
+    ba.phone AS billing_phone,
+    ba.line1 AS billing_line1,
+    ba.line2 AS billing_line2,
+    ba.landmark AS billing_landmark,
+    ba.city AS billing_city,
+    ba.state AS billing_state,
+    ba.postal_code AS billing_postal_code,
+    ba.country AS billing_country,
+
+    CONCAT_WS(
+      ', ',
+      ba.line1,
+      ba.line2,
+      ba.landmark,
+      ba.city,
+      ba.state,
+      ba.postal_code,
+      ba.country
+    ) AS billing_full_address
+
+  FROM (
+    SELECT o.*
+    FROM orders o
+    ${whereClause}
+    ORDER BY o.order_date DESC, o.id DESC
+    LIMIT ${limit}
+    OFFSET ${offset}
+  ) AS o
+
+  LEFT JOIN users u
+    ON o.user_id = u.id
+
+  LEFT JOIN user_addresses sa
+    ON o.shipping_address_id = sa.id
+
+  LEFT JOIN user_addresses ba
+    ON o.billing_address_id = ba.id
+
+  ORDER BY o.order_date DESC, o.id DESC
+  `,
+      params,
+    );
+
+    // console.log("FINAL ORDERS LENGTH:", orders.length);
+    // console.log(
+    //   "FINAL ORDER IDS:",
+    //   orders.map((order) => order.id),
+    // );
+
+    const orderIds = orders.map((order) => order.id);
+    let orderItemsMap = {};
+
+    if (orderIds.length > 0) {
+      const placeholders = orderIds.map(() => "?").join(",");
+
+      const [items] = await pool.query(
+        `
+        SELECT
+          oi.id,
+          oi.order_id,
+          oi.product_id,
+          oi.quantity,
+          oi.unit_price,
+          oi.total_price,
+          oi.product_data_snapshot AS product_snapshot,
+
+          p.name AS product_name,
+          p.slug AS product_slug,
+          p.status AS product_status,
+          p.sku AS product_sku,
+          p.price AS current_price,
+          p.weight,
+          p.width,
+          p.height,
+          p.depth,
+          p.is_available,
+          p.available_stock
+
+        FROM order_items oi
+
+        LEFT JOIN product p
+          ON oi.product_id = p.id
+
+        WHERE oi.order_id IN (${placeholders})
+
+        ORDER BY oi.order_id, oi.id
+        `,
+        orderIds,
+      );
+
+      orderItemsMap = items.reduce((acc, item) => {
+        let productSnapshot = item.product_snapshot;
+
+        if (typeof productSnapshot === "string") {
+          try {
+            productSnapshot = JSON.parse(productSnapshot);
+          } catch {
+            productSnapshot = {};
+          }
+        }
+
+        if (!acc[item.order_id]) {
+          acc[item.order_id] = [];
+        }
+
+        acc[item.order_id].push({
+          id: item.id,
+          product_id: item.product_id,
+          quantity: item.quantity,
+          unit_price: item.unit_price,
+          total_price: item.total_price,
+
+          product: {
+            id: item.product_id,
+            name: item.product_name || productSnapshot?.product_name,
+            slug: item.product_slug,
+            sku: item.product_sku || productSnapshot?.sku,
+            variation: productSnapshot?.variation || null,
+            status: item.product_status,
+            current_price: item.current_price,
+            weight: item.weight,
+
+            dimensions: {
+              width: item.width,
+              height: item.height,
+              depth: item.depth,
+            },
+
+            is_available: item.is_available,
+            available_stock: item.available_stock,
+            snapshot: productSnapshot,
+          },
+        });
+
+        return acc;
+      }, {});
+    }
+
+    const ordersWithDetails = orders.map((order) => ({
+      ...order,
+
+      items: orderItemsMap[order.id] || [],
+      item_count: orderItemsMap[order.id]?.length || 0,
+
+      summary: {
+        subtotal: order.subtotal,
+        shipping_cost: order.shipping_cost,
+        tax_amount: order.tax_amount,
+        discount_amount: order.discount_amount,
+        total_amount: order.total_amount,
+        currency: order.currency_code,
+      },
+
+      customer: {
+        id: order.user_id,
+        name: order.customer_name,
+        email: order.customer_email,
+        phone: order.customer_phone,
+        profile_image: order.customer_profile_image,
+        role: order.customer_role,
+      },
+
+      shipping_address: {
+        id: order.shipping_address_id,
+        full_name: order.shipping_full_name,
+        phone: order.shipping_phone,
+        line1: order.shipping_line1,
+        line2: order.shipping_line2,
+        landmark: order.shipping_landmark,
+        city: order.shipping_city,
+        state: order.shipping_state,
+        postal_code: order.shipping_postal_code,
+        country: order.shipping_country,
+        full_address: order.shipping_full_address,
+      },
+
+      billing_address: {
+        id: order.billing_address_id,
+        full_name: order.billing_full_name,
+        phone: order.billing_phone,
+        line1: order.billing_line1,
+        line2: order.billing_line2,
+        landmark: order.billing_landmark,
+        city: order.billing_city,
+        state: order.billing_state,
+        postal_code: order.billing_postal_code,
+        country: order.billing_country,
+        full_address: order.billing_full_address,
+      },
+    }));
+
+    return res.status(200).json({
+      success: true,
+      data: ordersWithDetails,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+        hasNextPage: page < Math.ceil(total / limit),
+        hasPreviousPage: page > 1,
+      },
+    });
+  } catch (error) {
+    console.error("Get all orders error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
 export const getOrderDashboardStats = async (req, res) => {
   try {
     const [rows] = await pool.query(`
@@ -1505,7 +2541,7 @@ export const updateOrderAddresses = async (req, res) => {
 
     const order = orders[0];
 
-    const blockedStatuses = ["shipped", "delivered", "cancelled", "refunded"];
+    const blockedStatuses = ["shipped", "delivered", "cancelled", "returned"];
 
     if (blockedStatuses.includes(order.order_status)) {
       await connection.rollback();
@@ -1763,10 +2799,7 @@ export const updateOrderAddresses = async (req, res) => {
           [fullAddressString, order.id],
         );
 
-        console.log(
-          "Updated shipment rows:",
-          shipmentUpdateResult.affectedRows,
-        );
+       
       }
     }
     const [updatedOrders] = await connection.query(
@@ -1832,6 +2865,208 @@ export const updateOrderAddresses = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to update order address",
+      error: error.message,
+    });
+  } finally {
+    connection.release();
+  }
+};
+
+export const cancelMyOrder = async (req, res) => {
+  const orderId = Number(req.params.id);
+  const userId = req.user.id;
+
+  if (!Number.isInteger(orderId) || orderId <= 0) {
+    return res.status(400).json({
+      success: false,
+      message: "Invalid order ID",
+    });
+  }
+
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.query("SET time_zone = '+05:30'");
+    await connection.beginTransaction();
+
+    const [orders] = await connection.query(
+      `SELECT
+          o.*,
+          u.full_name AS customer_name,
+          u.email AS customer_email,
+
+          CONCAT_WS(
+            ', ',
+            sa.full_name,
+            sa.line1,
+            sa.line2,
+            sa.landmark,
+            CONCAT(sa.city, ', ', sa.state, ' - ', sa.postal_code),
+            sa.country,
+            CONCAT('Phone: ', sa.phone)
+          ) AS shipping_full_address
+
+      FROM orders o
+      JOIN users u
+        ON u.id = o.user_id
+      LEFT JOIN user_addresses sa
+        ON sa.id = o.shipping_address_id
+      WHERE o.id = ?
+        AND o.user_id = ?
+      FOR UPDATE`,
+      [orderId, userId],
+    );
+
+    if (!orders.length) {
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        message: "Order not found",
+      });
+    }
+
+    const order = orders[0];
+
+    if (order.order_status === "cancelled") {
+      await connection.rollback();
+
+      return res.status(400).json({
+        success: false,
+        message: "Order is already cancelled",
+      });
+    }
+
+    const cancellableStatuses = ["pending", "processing"];
+
+    if (!cancellableStatuses.includes(order.order_status)) {
+      await connection.rollback();
+
+      return res.status(400).json({
+        success: false,
+        message: "Order cannot be cancelled after it has been shipped.",
+      });
+    }
+
+    await connection.query(
+      `UPDATE orders
+       SET
+          order_status='cancelled',
+          delivered_at=NULL
+       WHERE id=?`,
+      [orderId],
+    );
+
+    // Restore stock
+    const [items] = await connection.query(
+      `SELECT product_id, quantity
+       FROM order_items
+       WHERE order_id=?`,
+      [orderId],
+    );
+
+    for (const item of items) {
+      await connection.query(
+        `UPDATE product
+         SET available_stock = available_stock + ?
+         WHERE id=?`,
+        [item.quantity, item.product_id],
+      );
+
+      await connection.query(
+        `UPDATE product_stock
+         SET reserved_quantity =
+           GREATEST(reserved_quantity - ?,0)
+         WHERE product_id=?`,
+        [item.quantity, item.product_id],
+      );
+    }
+
+    // Shipment
+    const [shipmentRows] = await connection.query(
+      `SELECT id, tracking_history
+       FROM shipments
+       WHERE order_id=?
+       ORDER BY created_at DESC
+       LIMIT 1
+       FOR UPDATE`,
+      [orderId],
+    );
+
+    if (shipmentRows.length) {
+      let trackingHistory = shipmentRows[0].tracking_history || [];
+
+      if (typeof trackingHistory === "string") {
+        try {
+          trackingHistory = JSON.parse(trackingHistory);
+        } catch {
+          trackingHistory = [];
+        }
+      }
+
+      trackingHistory.push({
+        event: "Order cancelled by customer",
+        order_status: "cancelled",
+        previous_order_status: order.order_status,
+        source: "customer",
+        date: new Date().toISOString(),
+      });
+
+      await connection.query(
+        `UPDATE shipments
+         SET
+           current_status='cancelled',
+           tracking_history=?
+         WHERE id=?`,
+        [JSON.stringify(trackingHistory), shipmentRows[0].id],
+      );
+    }
+
+    await connection.commit();
+
+    // Audit Log
+    try {
+      await logAudit({
+        userId,
+        action: "CANCEL",
+        tableName: "orders",
+        recordId: orderId,
+        oldData: order,
+        newData: {
+          ...order,
+          order_status: "cancelled",
+        },
+        req,
+      });
+    } catch (err) {
+      console.error(err);
+    }
+
+    // Email
+    try {
+      await sendOrderStatusEmail(order.customer_email, {
+        order_id: orderId,
+        customer_name: order.customer_name,
+        order_status: "cancelled",
+        total_amount: Number(order.total_amount),
+        currency_code: order.currency_code || "INR",
+        shipping_address: order.shipping_full_address,
+      });
+    } catch (err) {
+      console.error("Cancel email failed:", err.message);
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Order cancelled successfully.",
+    });
+  } catch (error) {
+    await connection.rollback();
+
+    console.error(error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to cancel order.",
       error: error.message,
     });
   } finally {

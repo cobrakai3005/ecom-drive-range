@@ -556,47 +556,79 @@ export const updateCouponTemplate = async (req, res) => {
 
 export const getAllCouponTemplates = async (req, res) => {
   try {
-    // Pagination
-    const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 10));
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(
+      100,
+      Math.max(1, parseInt(req.query.limit, 10) || 10),
+    );
     const offset = (page - 1) * limit;
 
-    // Filters
-    const { search, status } = req.query;
+    const { search = "", status } = req.query;
 
-    let whereClause = "WHERE 1=1";
+    const whereConditions = [];
     const params = [];
 
     // Status filter
-    if (status) {
-      if (status === "active") {
-        whereClause += " AND is_active = ?";
-        params.push(1);
-      } else if (status === "inactive") {
-        whereClause += " AND is_active = ?";
-        params.push(0);
-      }
+    if (status === "active") {
+      whereConditions.push("is_active = 1");
+      whereConditions.push("valid_from <= NOW()");
+      whereConditions.push("valid_to >= NOW()");
+    } else if (status === "inactive") {
+      whereConditions.push("is_active = 0");
+    } else if (status === "expired") {
+      whereConditions.push("valid_to < NOW()");
+    } else if (status === "all") {
+      whereConditions.push("is_active = 1");
+      
     }
 
     // Search filter
-    if (search && search.trim()) {
-      whereClause += " AND code LIKE ?";
-      params.push(`%${search.trim()}%`);
+    if (search.trim()) {
+      whereConditions.push("(code LIKE ? OR description LIKE ?)");
+
+      const searchValue = `%${search.trim()}%`;
+      params.push(searchValue, searchValue);
     }
 
+    const whereClause =
+      whereConditions.length > 0
+        ? `WHERE ${whereConditions.join(" AND ")}`
+        : "";
+
     // Count query
-    const [countResult] = await pool.query(
+    const [[countResult]] = await pool.query(
       `SELECT COUNT(*) AS total
        FROM coupons
        ${whereClause}`,
       params,
     );
 
-    const total = countResult[0].total;
+    const total = Number(countResult.total);
 
     // Data query
     const [rows] = await pool.query(
-      `SELECT *
+      `SELECT
+         id,
+         code,
+         discount_type,
+         discount_value,
+         min_order_amount,
+         max_discount_amount,
+         usage_limit_per_user,
+         total_usage_limit,
+         valid_from,
+         valid_to,
+         description,
+         is_active,
+         created_by_user_id,
+         created_at,
+         updated_at,
+         CASE
+           WHEN is_active = 0 THEN 'inactive'
+           WHEN valid_to < NOW() THEN 'expired'
+           WHEN valid_from > NOW() THEN 'upcoming'
+           ELSE 'active'
+         END AS coupon_status
        FROM coupons
        ${whereClause}
        ORDER BY created_at DESC
@@ -612,289 +644,19 @@ export const getAllCouponTemplates = async (req, res) => {
         page,
         limit,
         totalPages: Math.ceil(total / limit),
+        hasNextPage: page < Math.ceil(total / limit),
+        hasPreviousPage: page > 1,
       },
     });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ success: false, message: "Server error" });
+    console.error("Get coupon templates error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
   }
 };
-
-// export const getCouponById = async (req, res) => {
-//   const couponId = Number(req.params.id);
-
-//   if (!Number.isInteger(couponId) || couponId <= 0) {
-//     return res.status(400).json({
-//       success: false,
-//       message: "Valid coupon ID is required",
-//     });
-//   }
-
-//   try {
-//     const [couponRows] = await pool.query(
-//       `SELECT
-//         c.id,
-//         c.code,
-//         c.discount_type,
-//         c.discount_value,
-//         c.min_order_amount,
-//         c.max_discount_amount,
-//         c.usage_limit_per_user,
-//         c.total_usage_limit,
-//         c.valid_from,
-//         c.valid_to,
-//         c.description,
-//         c.is_active,
-//         c.created_by_user_id,
-//         c.created_at,
-//         c.updated_at,
-
-//         CASE
-//           WHEN c.is_active = 0 THEN 'inactive'
-//           WHEN NOW() < c.valid_from THEN 'upcoming'
-//           WHEN NOW() > c.valid_to THEN 'expired'
-//           ELSE 'active'
-//         END AS coupon_status,
-
-//         COUNT(DISTINCT o.id) AS total_used,
-//         COUNT(DISTINCT o.user_id) AS unique_users,
-//         COALESCE(SUM(o.discount_amount), 0) AS total_discount_given
-
-//        FROM coupons c
-
-//        LEFT JOIN orders o
-//          ON o.coupon_id = c.id
-
-//        WHERE c.id = ?
-
-//        GROUP BY
-//         c.id,
-//         c.code,
-//         c.discount_type,
-//         c.discount_value,
-//         c.min_order_amount,
-//         c.max_discount_amount,
-//         c.usage_limit_per_user,
-//         c.total_usage_limit,
-//         c.valid_from,
-//         c.valid_to,
-//         c.description,
-//         c.is_active,
-//         c.created_by_user_id,
-//         c.created_at,
-//         c.updated_at
-
-//        LIMIT 1`,
-//       [couponId],
-//     );
-
-//     if (couponRows.length === 0) {
-//       return res.status(404).json({
-//         success: false,
-//         message: "Coupon not found",
-//       });
-//     }
-
-//     const coupon = couponRows[0];
-
-//     const [usageRows] = await pool.query(
-//       `SELECT
-//         o.id AS order_id,
-//         o.user_id,
-//         o.order_status,
-//         o.order_date,
-//         o.subtotal,
-//         o.shipping_cost,
-//         o.tax_amount,
-//         o.discount_amount,
-//         o.total_amount,
-//         o.currency_code,
-//         o.payment_method,
-//         o.payment_status,
-
-//         u.full_name AS customer_name,
-//         u.email AS customer_email,
-//         u.phone AS customer_phone,
-
-//         oi.id AS order_item_id,
-//         oi.product_id,
-//         oi.quantity,
-//         oi.unit_price,
-//         oi.total_price,
-//         oi.product_data_snapshot,
-
-//         p.name AS product_name
-
-//        FROM orders o
-
-//        INNER JOIN users u
-//          ON u.id = o.user_id
-
-//        LEFT JOIN order_items oi
-//          ON oi.order_id = o.id
-
-//        LEFT JOIN products p
-//          ON p.id = oi.product_id
-
-//        WHERE o.coupon_id = ?
-
-//        ORDER BY o.order_date DESC, o.id DESC, oi.id ASC`,
-//       [couponId],
-//     );
-
-//     const orderMap = new Map();
-
-//     for (const row of usageRows) {
-//       if (!orderMap.has(row.order_id)) {
-//         orderMap.set(row.order_id, {
-//           order_id: row.order_id,
-//           coupon_used_at: row.order_date,
-
-//           customer: {
-//             id: row.user_id,
-//             full_name: row.customer_name,
-//             email: row.customer_email,
-//             phone: row.customer_phone,
-//           },
-
-//           order: {
-//             order_status: row.order_status,
-//             payment_status: row.payment_status,
-//             payment_method: row.payment_method,
-//             currency_code: row.currency_code,
-//             subtotal: Number(row.subtotal || 0),
-//             shipping_cost: Number(row.shipping_cost || 0),
-//             tax_amount: Number(row.tax_amount || 0),
-//             discount_amount: Number(row.discount_amount || 0),
-//             total_amount: Number(row.total_amount || 0),
-//           },
-
-//           products: [],
-//         });
-//       }
-
-//       if (row.order_item_id) {
-//         let snapshot = row.product_data_snapshot;
-
-//         if (typeof snapshot === "string") {
-//           try {
-//             snapshot = JSON.parse(snapshot);
-//           } catch {
-//             snapshot = null;
-//           }
-//         }
-
-//         orderMap.get(row.order_id).products.push({
-//           order_item_id: row.order_item_id,
-//           product_id: row.product_id,
-//           product_name:
-//             snapshot?.product_name ||
-//             snapshot?.name ||
-//             row.product_name ||
-//             "Product unavailable",
-//           sku: snapshot?.sku || row.product_sku || null,
-//           quantity: Number(row.quantity || 0),
-//           unit_price: Number(row.unit_price || 0),
-//           total_price: Number(row.total_price || 0),
-//         });
-//       }
-//     }
-
-//     const usageHistory = Array.from(orderMap.values());
-
-//     const usedByMap = new Map();
-
-//     for (const usage of usageHistory) {
-//       const userId = usage.customer.id;
-
-//       if (!usedByMap.has(userId)) {
-//         usedByMap.set(userId, {
-//           user_id: userId,
-//           full_name: usage.customer.full_name,
-//           email: usage.customer.email,
-//           phone: usage.customer.phone,
-//           total_orders: 0,
-//           total_discount_received: 0,
-//           orders: [],
-//         });
-//       }
-
-//       const user = usedByMap.get(userId);
-
-//       user.total_orders += 1;
-//       user.total_discount_received += usage.order.discount_amount;
-
-//       user.orders.push({
-//         order_id: usage.order_id,
-//         coupon_used_at: usage.coupon_used_at,
-//         order_status: usage.order.order_status,
-//         payment_status: usage.order.payment_status,
-//         discount_amount: usage.order.discount_amount,
-//         total_amount: usage.order.total_amount,
-//         products: usage.products,
-//       });
-//     }
-
-//     const usedBy = Array.from(usedByMap.values());
-
-//     coupon.discount_value = Number(coupon.discount_value);
-//     coupon.min_order_amount = Number(coupon.min_order_amount);
-
-//     coupon.max_discount_amount =
-//       coupon.max_discount_amount !== null
-//         ? Number(coupon.max_discount_amount)
-//         : null;
-
-//     coupon.total_usage_limit =
-//       coupon.total_usage_limit !== null
-//         ? Number(coupon.total_usage_limit)
-//         : null;
-
-//     coupon.is_active = Boolean(coupon.is_active);
-//     coupon.total_used = Number(coupon.total_used || 0);
-//     coupon.unique_users = Number(coupon.unique_users || 0);
-//     coupon.total_discount_given = Number(coupon.total_discount_given || 0);
-
-//     const remainingUsage =
-//       coupon.total_usage_limit !== null
-//         ? Math.max(coupon.total_usage_limit - coupon.total_used, 0)
-//         : null;
-
-//     return res.status(200).json({
-//       success: true,
-//       message: "Coupon details fetched successfully",
-//       data: {
-//         coupon: {
-//           ...coupon,
-//           remaining_usage: remainingUsage,
-//         },
-
-//         usage_summary: {
-//           total_used: coupon.total_used,
-//           unique_users: usedBy.length,
-//           total_discount_given: coupon.total_discount_given,
-//           total_usage_limit: coupon.total_usage_limit,
-//           remaining_usage: remainingUsage,
-//         },
-
-//         used_by: usedBy,
-
-//         usage_history: usageHistory,
-//       },
-//     });
-//   } catch (error) {
-//     console.error("Get coupon details error:", error);
-
-//     return res.status(500).json({
-//       success: false,
-//       message: "Failed to fetch coupon details",
-//       error: error.message,
-//     });
-//   }
-// };
-
-// ========== GET USER'S COUPONS (admin view) ==========
-
 export const getCouponById = async (req, res) => {
   const couponId = Number(req.params.id);
 
@@ -1485,3 +1247,5 @@ export const deleteCoupon = async (req, res) => {
     });
   }
 };
+
+

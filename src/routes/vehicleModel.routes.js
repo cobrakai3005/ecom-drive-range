@@ -6,6 +6,7 @@ import {
   updateModel,
   deleteModel,
   restoreModel,
+  toggleStatus,
 } from "../controllers/vehicleModel.controller.js";
 import verifyToken from "../middlewares/auth.middleware.js";
 import { authorize } from "../middlewares/authorize.middleware.js";
@@ -57,5 +58,12 @@ router.delete(
   deleteModel,
 );
 router.get("/restore/:id", verifyToken, authorize("Admin"), restoreModel);
+
+router.patch(
+  "/toggle_status/:id",
+  verifyToken,
+  authorize("Admin"),
+  toggleStatus,
+);
 
 export default router;

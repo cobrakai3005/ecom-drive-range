@@ -42,7 +42,7 @@ import vehicleMakeRoutes from "./routes/vehicleMake.routes.js";
 import vehicleModelRoutes from "./routes/vehicleModel.routes.js";
 import vehicleGenerationRoutes from "./routes/vehicleGeneration.routes.js";
 import shipmentsRoutes from "./routes/shipments.route.js";
-
+import shippingCostRoutes from './routes/shippingCost.route.js';
 // import paymentMothodsRoutes from "./routes/payment_method.route.js";
 import transactionsRoutes from "./routes/transactions.route.js";
 import couponRoutes from "./routes/couponAdmin.routes.js";
@@ -83,6 +83,7 @@ app.use("/api/vehicle-compatibility", vehicleCompatibilty);
 app.use("/api/shipments", shipmentsRoutes);
 // app.use("/api/website-reviews", websiteReviews);
 app.use("/api/messages", messageRoute);
+app.use("/api/shipping-costs", shippingCostRoutes);
 app.listen(port, async () => {
   await connect();
   console.log(`Server is running on PORT ${port}`);

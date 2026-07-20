@@ -335,6 +335,7 @@ export const getAllProducts = async (req, res) => {
     if (status === "deleted") {
       whereClauses.push("p.status = 'inactive'");
       whereClauses.push("p.is_available = 0");
+    } else if (status === "all") {
     } else if (status) {
       if (!["active", "inactive"].includes(status)) {
         return res.status(400).json({
@@ -720,11 +721,10 @@ export const createProduct = async (req, res) => {
     //   0,
     //   "active",
     // ]);
-    const product_media = req.files?.map((file) => [
+    const product_media = req.files?.map((file, i) => [
       productId,
       `${req.protocol}://${req.get("host")}/uploads/products/${file.filename}`,
-
-      0,
+      i,
       "active",
     ]);
 
@@ -998,18 +998,17 @@ export const updateProduct = async (req, res) => {
       ]);
 
       // Prepare new images
-      const product_media = req.files.map((file) => [
+      const product_media = req.files.map((file, i) => [
         productId,
         `${req.protocol}://${req.get("host")}/uploads/products/${file.filename}`,
-        file.filename,
-        0,
+        i,
         "active",
       ]);
 
       // Insert new records
       await connection.query(
         `INSERT INTO product_media
-      (product_id, image_url, image_url_id, sort_order, status)
+      (product_id, image_url,  sort_order, status)
      VALUES ?`,
         [product_media],
       );
@@ -1382,9 +1381,9 @@ export const toggleProductStatus = async (req, res) => {
  *   - page (default 1)
  *   - per_page (default 15, max 100)
  */
+
 export const getVehicleProducts = async (req, res, next) => {
   try {
-    // 1. Parse and validate query params
     const {
       make_id,
       model_id,
@@ -1395,95 +1394,280 @@ export const getVehicleProducts = async (req, res, next) => {
     } = req.query;
 
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
+
     const perPageNum = Math.min(100, Math.max(1, parseInt(per_page, 10) || 15));
+
     const offset = (pageNum - 1) * perPageNum;
 
-    // 2. Build the base SQL with filters
-    //    We'll use a single query that joins all tables and selects distinct products.
-    //    We'll conditionally append WHERE clauses.
-    let sql = `
-      SELECT DISTINCT p.*
-      FROM product p
-      INNER JOIN product_vehicle_compatibility pvc ON p.id = pvc.product_id
-      INNER JOIN vehicle_generations vg ON pvc.vehicle_generation_id = vg.id
-      INNER JOIN vehicle_models vm ON vg.model_id = vm.id
-      INNER JOIN vehicle_makes vmk ON vm.make_id = vmk.id
-      WHERE p.status = 'active'
-        AND vg.status = 'active'
-        AND vm.status = 'active'
-        AND vmk.status = 'active'
-    `;
+    /*
+     * These conditions apply to every returned product,
+     * including universal products.
+     */
+    const whereConditions = [
+      // Product must be active and available
+      "p.status = 'active'",
+      "p.is_available = 1",
 
-    // 3. Append filters conditionally
+      // Category must exist, be active and not deleted
+      "c.id IS NOT NULL",
+      "c.status = 'active'",
+      "c.is_deleted = 0",
+
+      /*
+       * Subcategory:
+       * Allow NULL subcategory_id.
+       * If product has a subcategory, it must exist,
+       * be active and not deleted.
+       */
+      `(
+        p.sub_category_id IS NULL
+        OR (
+          sc.id IS NOT NULL
+          AND sc.status = 'active'
+          AND sc.is_deleted = 0
+        )
+      )`,
+
+      /*
+       * Brand:
+       * Allow NULL brand_id.
+       * If product has a brand, it must exist,
+       * be active and not deleted.
+       */
+      `(
+        p.brand_id IS NULL
+        OR (
+          b.id IS NOT NULL
+          AND b.status = 'active'
+          AND b.is_deleted = 0
+        )
+      )`,
+    ];
+
     const params = [];
+    const vehicleConditions = [];
+
+    /*
+     * Optional vehicle filters
+     */
     if (make_id) {
-      sql += ` AND vmk.id = ?`;
+      vehicleConditions.push("vmk.id = ?");
       params.push(make_id);
     }
+
     if (model_id) {
-      sql += ` AND vm.id = ?`;
+      vehicleConditions.push("vm.id = ?");
       params.push(model_id);
     }
+
     if (generation_id) {
-      sql += ` AND vg.id = ?`;
+      vehicleConditions.push("vg.id = ?");
       params.push(generation_id);
     }
+
     if (compatibility_id) {
-      sql += ` AND pvc.id = ?`;
+      vehicleConditions.push("pvc.id = ?");
       params.push(compatibility_id);
     }
 
-    // 4. Count query (total matching products)
-    const countSql = `
-      SELECT COUNT(DISTINCT p.id) AS total
-      FROM product p
-      INNER JOIN product_vehicle_compatibility pvc ON p.id = pvc.product_id
-      INNER JOIN vehicle_generations vg ON pvc.vehicle_generation_id = vg.id
-      INNER JOIN vehicle_models vm ON vg.model_id = vm.id
-      INNER JOIN vehicle_makes vmk ON vm.make_id = vmk.id
-      WHERE p.status = 'active'
-        AND vg.status = 'active'
-        AND vm.status = 'active'
-        AND vmk.status = 'active'
-        ${make_id ? " AND vmk.id = ?" : ""}
-        ${model_id ? " AND vm.id = ?" : ""}
-        ${generation_id ? " AND vg.id = ?" : ""}
-        ${compatibility_id ? " AND pvc.id = ?" : ""}
-    `;
-    // Build params for count (same as data query)
-    const countParams = [];
-    if (make_id) countParams.push(make_id);
-    if (model_id) countParams.push(model_id);
-    if (generation_id) countParams.push(generation_id);
-    if (compatibility_id) countParams.push(compatibility_id);
+    /*
+     * Universal products are always returned.
+     *
+     * Non-universal products must:
+     * - Have compatibility
+     * - Match provided vehicle filters
+     * - Have active/non-deleted generation, model and make
+     */
+    if (vehicleConditions.length > 0) {
+      whereConditions.push(`
+        (
+          p.is_universal = 1
 
-    // 5. Execute count query
-    const [countRows] = await pool.query(countSql, countParams);
-    const total = countRows[0].total;
+          OR
 
-    // 6. Add pagination (ORDER BY and LIMIT/OFFSET)
-    const dataSql = sql + ` ORDER BY p.id ASC LIMIT ? OFFSET ?`;
-    const dataParams = [...params, perPageNum, offset];
+          (
+            p.is_universal = 0
+            AND pvc.id IS NOT NULL
 
-    // 7. Execute data query
-    const [dataRows] = await pool.query(dataSql, dataParams);
+            AND ${vehicleConditions.join(" AND ")}
 
-    // Fetch media for each product
-    for (let product of dataRows) {
-      product.media = await getProductMedia(product.id);
+            AND vg.id IS NOT NULL
+            AND vg.status = 'active'
+            AND vg.is_deleted = 0
+
+            AND vm.id IS NOT NULL
+            AND vm.status = 'active'
+            AND vm.is_deleted = 0
+
+            AND vmk.id IS NOT NULL
+            AND vmk.status = 'active'
+            AND vmk.is_deleted = 0
+          )
+        )
+      `);
+    } else {
+      /*
+       * When no vehicle filter is provided:
+       * - Return universal products
+       * - Return non-universal products having valid compatibility
+       */
+      whereConditions.push(`
+        (
+          p.is_universal = 1
+
+          OR
+
+          (
+            p.is_universal = 0
+            AND pvc.id IS NOT NULL
+
+            AND vg.id IS NOT NULL
+            AND vg.status = 'active'
+            AND vg.is_deleted = 0
+
+            AND vm.id IS NOT NULL
+            AND vm.status = 'active'
+            AND vm.is_deleted = 0
+
+            AND vmk.id IS NOT NULL
+            AND vmk.status = 'active'
+            AND vmk.is_deleted = 0
+          )
+        )
+      `);
     }
 
-    // 8. Send response
-    res.json({
+    /*
+     * LEFT JOIN is required for vehicle tables because
+     * universal products may not have compatibility rows.
+     */
+    const joins = `
+      FROM product p
+
+      LEFT JOIN product_vehicle_compatibility pvc
+        ON p.id = pvc.product_id
+
+      LEFT JOIN vehicle_generations vg
+        ON pvc.vehicle_generation_id = vg.id
+
+      LEFT JOIN vehicle_models vm
+        ON vg.model_id = vm.id
+
+      LEFT JOIN vehicle_makes vmk
+        ON vm.make_id = vmk.id
+
+      LEFT JOIN categories c
+        ON p.category_id = c.id
+
+      LEFT JOIN subcategory sc
+        ON p.sub_category_id = sc.id
+
+      LEFT JOIN brands b
+        ON p.brand_id = b.id
+    `;
+
+    const whereSql = `
+      WHERE ${whereConditions.join(" AND ")}
+    `;
+
+    /*
+     * Count unique matching products
+     */
+    const countSql = `
+      SELECT COUNT(DISTINCT p.id) AS total
+      ${joins}
+      ${whereSql}
+    `;
+
+    const [countRows] = await pool.query(countSql, params);
+
+    const total = Number(countRows[0]?.total || 0);
+
+    /*
+     * Fetch product details
+     */
+    const dataSql = `
+      SELECT DISTINCT
+        p.*,
+
+        c.name AS category_name,
+        c.status AS category_status,
+        c.is_deleted AS category_is_deleted,
+
+        sc.name AS sub_category_name,
+        sc.status AS sub_category_status,
+        sc.is_deleted AS sub_category_is_deleted,
+
+        b.name AS brand_name,
+        b.status AS brand_status,
+        b.is_deleted AS brand_is_deleted,
+
+        vmk.id AS vehicle_make_id,
+        vmk.name AS vehicle_make_name,
+
+        vm.id AS vehicle_model_id,
+        vm.name AS vehicle_model_name,
+
+        vg.id AS vehicle_generation_id,
+        vg.generation_name,
+        vg.year_from,
+        vg.year_to,
+        vg.engine_options,
+
+        pvc.id AS compatibility_id
+
+      ${joins}
+      ${whereSql}
+
+      ORDER BY p.id ASC
+      LIMIT ?
+      OFFSET ?
+    `;
+
+    const dataParams = [...params, perPageNum, offset];
+
+    const [dataRows] = await pool.query(dataSql, dataParams);
+
+    /*
+     * Attach product media and normalize boolean values
+     */
+    await Promise.all(
+      dataRows.map(async (product) => {
+        product.media = await getProductMedia(product.id);
+
+        product.is_available = Boolean(product.is_available);
+        product.is_featured = Boolean(product.is_featured);
+        product.is_front = Boolean(product.is_front);
+        product.is_universal = Boolean(product.is_universal);
+
+        product.category_is_deleted = Boolean(product.category_is_deleted);
+
+        product.sub_category_is_deleted =
+          product.sub_category_is_deleted === null
+            ? null
+            : Boolean(product.sub_category_is_deleted);
+
+        product.brand_is_deleted =
+          product.brand_is_deleted === null
+            ? null
+            : Boolean(product.brand_is_deleted);
+      }),
+    );
+
+    return res.status(200).json({
+      success: true,
       data: dataRows,
       pagination: {
         current_page: pageNum,
         per_page: perPageNum,
         total,
         total_pages: Math.ceil(total / perPageNum),
+        has_next_page: pageNum * perPageNum < total,
+        has_previous_page: pageNum > 1,
       },
     });
   } catch (error) {
+    console.error("Error in getVehicleProducts:", error);
     next(error);
   }
 };

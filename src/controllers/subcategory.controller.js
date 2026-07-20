@@ -38,7 +38,7 @@ export const getAllSubcategories = async (req, res) => {
     // Query parameters
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 10));
-    const status = req.query.status; // 'active', 'inactive', or undefined
+    const status = req.query.status; // 'active', 'inactive', or all
     const category_id = req.query.category_id
       ? parseInt(req.query.category_id)
       : undefined;
@@ -52,6 +52,8 @@ export const getAllSubcategories = async (req, res) => {
     if (status === "deleted") {
       whereConditions.push("s.status = 'inactive'");
       whereConditions.push("s.is_deleted = 1");
+    } else if (status === "all") {
+      whereConditions.push("s.is_deleted = 0");
     } else if (status && ["active", "inactive"].includes(status)) {
       whereConditions.push("s.status = ?");
       whereConditions.push("s.is_deleted = 0");

@@ -35,9 +35,11 @@ const makeSlugUnique = async (slug, currentId = null) => {
 
 export const getAllCategories = async (req, res) => {
   try {
-    // Parse and sanitize pagination
-    const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 10));
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(
+      100,
+      Math.max(1, parseInt(req.query.limit, 10) || 10),
+    );
     const offset = (page - 1) * limit;
 
     const { status, is_front, search } = req.query;
@@ -45,53 +47,61 @@ export const getAllCategories = async (req, res) => {
     const whereConditions = [];
     const params = [];
 
-    // Status filter (only if provided)
-
     if (status === "deleted") {
-      whereConditions.push("status = 'inactive'");
-      whereConditions.push("is_deleted = 1");
+      // Only soft-deleted categories
+      whereConditions.push("c.is_deleted = 1");
+    } else if (status === "all") {
+      whereConditions.push("c.is_deleted = 0");
     } else if (status && ["active", "inactive"].includes(status)) {
-      whereConditions.push("status = ?");
+      // Active/inactive categories that are not deleted
+      whereConditions.push("c.status = ?");
+      whereConditions.push("c.is_deleted = 0");
       params.push(status);
     } else {
-      // By default, only return active categories
-      whereConditions.push("status = 'active'");
-      whereConditions.push("is_deleted = 0");
+      // Default: active and not deleted
+      whereConditions.push("c.status = 'active'");
+      whereConditions.push("c.is_deleted = 0");
     }
-    // is_front filter (only if provided)
-    if (is_front !== undefined && is_front !== null) {
-      const isFrontValue = ["true", "1", 1].includes(is_front) ? 1 : 0;
-      whereConditions.push("is_front = ?");
+
+    if (is_front !== undefined && is_front !== null && is_front !== "") {
+      const isFrontValue = ["true", "1", 1, true].includes(is_front) ? 1 : 0;
+
+      whereConditions.push("c.is_front = ?");
       params.push(isFrontValue);
     }
 
-    // Search (multiple columns)
-    if (search) {
-      whereConditions.push("(c.name LIKE ? OR c.description LIKE ?)");
-      params.push(`%${search}%`, `%${search}%`);
+    if (search?.trim()) {
+      whereConditions.push(
+        "(c.name LIKE ? OR COALESCE(c.description, '') LIKE ?)",
+      );
+
+      const searchValue = `%${search.trim()}%`;
+      params.push(searchValue, searchValue);
     }
 
     const whereClause = whereConditions.length
       ? `WHERE ${whereConditions.join(" AND ")}`
       : "";
 
-    // Count total
     const [countRows] = await pool.query(
-      `SELECT COUNT(*) as total FROM categories c ${whereClause}`,
+      `SELECT COUNT(*) AS total
+       FROM categories c
+       ${whereClause}`,
       params,
     );
-    const total = countRows[0].total;
 
-    // Fetch data
+    const total = Number(countRows[0].total);
+
     const [rows] = await pool.query(
-      `SELECT * FROM categories c
-   ${whereClause}
-  ORDER BY is_front DESC, created_at DESC, id DESC  
-   LIMIT ? OFFSET ?`,
+      `SELECT *
+       FROM categories c
+       ${whereClause}
+       ORDER BY c.is_front DESC, c.created_at DESC, c.id DESC
+       LIMIT ? OFFSET ?`,
       [...params, limit, offset],
     );
 
-    res.json({
+    return res.status(200).json({
       success: true,
       data: rows,
       pagination: {
@@ -103,7 +113,11 @@ export const getAllCategories = async (req, res) => {
     });
   } catch (error) {
     console.error("Error in getAllCategories:", error);
-    res.status(500).json({ success: false, message: "Internal server error" });
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
   }
 };
 

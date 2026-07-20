@@ -90,10 +90,18 @@ export const getAllUsers = async (req, res) => {
     let whereConditions = [];
     let params = [];
 
+    if (!["active", "inactive", "all"].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: "status must be 'all', 'active', 'inactive', or 'deleted'",
+      });
+    }
     // Status filter: active (default) or inactive
     if (status === "inactive") {
       whereConditions.push("is_delete = TRUE");
-    } else {
+    } else if (status === "all") {
+      whereConditions.push("1 = 1");
+    } else if (status === "active") {
       // default: active (include only non-deleted)
       whereConditions.push("is_delete = FALSE");
     }

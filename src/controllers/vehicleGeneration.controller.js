@@ -122,7 +122,7 @@ export const getAllGenerations = async (req, res) => {
     const search = req.query.search?.trim() || "";
     const status = req.query.status?.trim() || "active";
 
-    if (!["active", "inactive", "deleted"].includes(status)) {
+    if (!["active", "inactive", "deleted", "all"].includes(status)) {
       return res.status(400).json({
         success: false,
         message: "status must be 'active', 'inactive', or 'deleted'",
@@ -135,7 +135,9 @@ export const getAllGenerations = async (req, res) => {
     if (status === "deleted") {
       conditions.push("g.status = 'inactive'");
       conditions.push("g.is_deleted = 1");
-    } else {
+    } else if (status === "all") {
+      conditions.push("g.is_deleted = 0");
+    } else if (["active", "inactive"].includes(status)) {
       conditions.push("g.status = ?");
       conditions.push("g.is_deleted = 0");
       params.push(status);
@@ -710,5 +712,40 @@ export const restoreGeneration = async (req, res) => {
       success: false,
       message: "Server error",
     });
+  }
+};
+
+export const toggleStatus = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const [rows] = await pool.query("SELECT status FROM vehicle_generations WHERE id = ?", [
+      id,
+    ]);
+    if (rows.length === 0) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Generation  not found" });
+    }
+
+    const currentStatus = rows[0].status;
+    const newStatus = currentStatus === "active" ? "inactive" : "active";
+
+    await pool.query("UPDATE vehicle_generations SET status = ? WHERE id = ?", [
+      newStatus,
+      id,
+    ]);
+
+    const [updated] = await pool.query("SELECT * FROM vehicle_generations WHERE id = ?", [
+      id,
+    ]);
+    res.json({
+      success: true,
+      message: `Generations status toggled to ${newStatus}`,
+      data: updated[0],
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: "Server error" });
   }
 };

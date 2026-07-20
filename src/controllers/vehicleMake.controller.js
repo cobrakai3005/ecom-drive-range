@@ -50,7 +50,9 @@ export const getAllMakes = async (req, res) => {
     if (status === "deleted") {
       conditions.push("status = 'inactive'");
       conditions.push("is_deleted = 1");
-    } else if (status !== "all") {
+    } else if (status === "all") {
+      conditions.push("is_deleted = 0");
+    } else if (status && ["active", "inactive"].includes(status)) {
       conditions.push("status = ?");
       conditions.push("is_deleted = 0");
       params.push(status);
@@ -363,6 +365,42 @@ export const restoreMake = async (req, res) => {
       success: false,
       message: "Server error",
     });
+  }
+};
+
+export const toggleStatus = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const [rows] = await pool.query(
+      "SELECT status FROM vehicle_makes WHERE id = ?",
+      [id],
+    );
+    if (rows.length === 0) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Vehicle Makes not found" });
+    }
+
+    const currentStatus = rows[0].status;
+    const newStatus = currentStatus === "active" ? "inactive" : "active";
+
+    await pool.query("UPDATE vehicle_makes SET status = ? WHERE id = ?", [
+      newStatus,
+      id,
+    ]);
+
+    const [updated] = await pool.query("SELECT * FROM brands WHERE id = ?", [
+      id,
+    ]);
+    res.json({
+      success: true,
+      message: `Vehicle Makes  status Changed to ${newStatus}`,
+      data: updated[0],
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: "Server error" });
   }
 };
 // export const deleteMake = async (req, res) => {

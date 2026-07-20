@@ -108,6 +108,89 @@ export const getAllShipments = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
+// export const getAllShipments = async (req, res) => {
+//   try {
+//     // 1. Parse query parameters
+//     const page = parseInt(req.query.page) || 1;
+//     const limit = parseInt(req.query.limit) || 10;
+//     const search = req.query.search || "";
+//     const status = req.query.status; // 'pending', 'shipped', etc.
+//     const carrier = req.query.carrier; // 'UPS', 'FedEx', etc.
+//     const offset = (page - 1) * limit;
+
+//     // 2. Build WHERE clause dynamically
+//     let whereConditions = [];
+//     let params = [];
+
+//     // Search across multiple columns (tracking_number, carrier, recipient_address)
+//     if (search) {
+//       whereConditions.push("(carrier LIKE ? OR recipient_address LIKE ?)");
+//       const like = `%${search}%`;
+//       params.push(like, like, like);
+//     }
+
+//     // Status filter
+//     if (status) {
+//       whereConditions.push("current_status = ?");
+//       params.push(status);
+//     }
+
+//     // Carrier filter (exact match)
+//     if (carrier) {
+//       whereConditions.push("carrier = ?");
+//       params.push(carrier);
+//     }
+
+//     const whereClause =
+//       whereConditions.length > 0
+//         ? `WHERE ${whereConditions.join(" AND ")}`
+//         : "";
+
+//     // 3. Count total matching records (for pagination)
+//     const countQuery = `SELECT COUNT(*) as total FROM shipments ${whereClause}`;
+//     const [countResult] = await pool.query(countQuery, params);
+//     const total = countResult[0].total;
+
+//     // 4. Fetch paginated data
+//     const dataQuery = `
+//           SELECT
+//           s.id,
+//           s.order_id,
+//           s.carrier,
+//           s.recipient_address,
+//           s.current_status,
+//           s.tracking_history,
+//           s.created_at,
+//           s.updated_at,
+//           u.full_name AS customer_name,
+//           u.email AS customer_email,
+//           u.phone AS customer_phone
+//       FROM shipments s
+//       JOIN orders o ON s.order_id = o.id
+//       JOIN users u ON o.user_id = u.id
+//       ${whereClause}
+//       ORDER BY s.created_at DESC
+//       LIMIT ? OFFSET ?;
+//     `;
+//     const dataParams = [...params, limit, offset];
+//     const [rows] = await pool.query(dataQuery, dataParams);
+
+//     // 5. Send response
+//     res.json({
+//       success: true,
+//       data: rows,
+//       pagination: {
+//         page,
+//         limit,
+//         total,
+//         totalPages: Math.ceil(total / limit),
+//       },
+//     });
+//   } catch (error) {
+//     console.error(error);
+//     res.status(500).json({ success: false, message: "Server error" });
+//   }
+// };
 
 export const getShipmentById = async (req, res) => {
   const { id } = req.params;
@@ -220,101 +303,26 @@ export const updateShipment = async (req, res) => {
   }
 };
 
-// 5. UPDATE STATUS ONLY
-// export const updateStatus = async (req, res) => {
-//   const { id } = req.params;
-//   const { status } = req.body;
-
-//   const allowedStatuses = [
-//     "pending",
-//     "assigned",
-//     "picked_up",
-//     "in_transit",
-//     "out_for_delivery",
-//     "delivered",
-//     "failed",
-//     "returned",
-//     "cancelled",
-//   ];
-
-//   if (!status) {
-//     return res.status(400).json({
-//       success: false,
-//       message: "Status is required",
-//     });
-//   }
-
-//   if (!allowedStatuses.includes(status)) {
-//     return res.status(400).json({
-//       success: false,
-//       message: `Invalid status. Allowed statuses are: ${allowedStatuses.join(", ")}`,
-//     });
-//   }
-
-//   try {
-//     const systemEvent = {
-//       event: `Status changed to ${status}`,
-//       timestamp: new Date().toISOString(),
-//     };
-
-//     const [result] = await pool.query(
-//       `UPDATE shipments
-//        SET current_status = ?,
-//            tracking_history = JSON_ARRAY_APPEND(
-//              IFNULL(tracking_history, JSON_ARRAY()),
-//              '$',
-//              CAST(? AS JSON)
-//            )
-//        WHERE id = ?`,
-//       [status, JSON.stringify(systemEvent), id],
-//     );
-
-//     if (result.affectedRows === 0) {
-//       return res.status(404).json({
-//         success: false,
-//         message: "Shipment not found",
-//       });
-//     }
-
-//     res.json({
-//       success: true,
-//       message: `Status updated to ${status}`,
-//     });
-//   } catch (error) {
-//     console.error(error);
-//     res.status(500).json({
-//       success: false,
-//       message: error.message,
-//     });
-//   }
-// };
-
 export const updateStatus = async (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
 
   const allowedStatuses = [
     "pending",
-    "assigned",
-    "picked_up",
-    "in_transit",
-    "out_for_delivery",
+    "processing",
+    "shipped",
     "delivered",
-    "failed",
-    "returned",
     "cancelled",
+    "returned",
   ];
 
   const statusEventMap = {
     pending: "Shipment pending",
-    assigned: "Courier assigned",
-    picked_up: "Package picked up",
-    in_transit: "Package in transit",
-    out_for_delivery: "Out for delivery",
-    delivered: "Delivered",
-    failed: "Delivery failed",
-    returned: "Returned",
-    cancelled: "Cancelled",
+    processing: "Shipment is Processing",
+    shipped: "Package is Shipped",
+    delivered: "Package is Delivered",
+    cancelled: "Shipment Cancelled",
+    returned: "Package is retuned",
   };
 
   if (!status) {
@@ -408,6 +416,7 @@ export const addTrackingEvent = async (req, res) => {
              WHERE id = ?`,
       [JSON.stringify(event), id],
     );
+
     res.json({ message: "Tracking event added" });
   } catch (error) {
     res.status(500).json({ error: error.message });

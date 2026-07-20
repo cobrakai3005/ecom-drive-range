@@ -52,6 +52,9 @@ export const getAllBrands = async (req, res) => {
     if (status === "deleted") {
       whereConditions.push("status = 'inactive'");
       whereConditions.push("is_deleted = 1");
+    } else if (status === "all") {
+      // whereConditions.push("status = ?");
+      whereConditions.push("is_deleted = 0");
     } else if (status && ["active", "inactive"].includes(status)) {
       whereConditions.push("status = ?");
       whereConditions.push("is_deleted = 0");

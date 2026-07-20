@@ -24,7 +24,7 @@ router.post(
   verifyToken,
   authorize("Admin"),
   (req, res, next) => {
-    upload.array("product_media")(req, res, (err) => {
+    upload.array("product_media", 8)(req, res, (err) => {
       if (err) {
         // Multer error (file size, type, etc.)
         return res.status(400).json({ message: err.message });

@@ -6,6 +6,7 @@ import {
   updateMake,
   deleteMake,
   restoreMake,
+  toggleStatus,
 } from "../controllers/vehicleMake.controller.js";
 import verifyToken from "../middlewares/auth.middleware.js";
 import { authorize } from "../middlewares/authorize.middleware.js";
@@ -52,5 +53,10 @@ router.put(
 );
 router.delete("/delete_make/:id", verifyToken, authorize("Admin"), deleteMake);
 router.get("/restore/:id", verifyToken, authorize("Admin"), restoreMake);
-
+router.patch(
+  "/toggle_status/:id",
+  verifyToken,
+  authorize("Admin"),
+  toggleStatus,
+);
 export default router;

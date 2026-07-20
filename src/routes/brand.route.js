@@ -6,6 +6,7 @@ import {
   updateBrand,
   deleteBrand,
   restoreBrand,
+  toggleBrandStatus,
 } from "../controllers/brand.controller.js";
 import verifyToken from "../middlewares/auth.middleware.js";
 import { authorize } from "../middlewares/authorize.middleware.js";
@@ -29,6 +30,13 @@ router.post(
   verifyToken,
   authorize("Admin"),
   createBrand,
+);
+
+router.patch(
+  "/toggle_status/:id",
+  verifyToken,
+  authorize("Admin"),
+  toggleBrandStatus,
 );
 router.put(
   "/update_brand/:id",
